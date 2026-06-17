@@ -85,7 +85,10 @@ pub async fn serve(
     fs::write(&tmp_preset, expanded).await?;
 
     let preset = preset::parse_preset(&preset_path)?;
-    let bind_host = preset.global.host.unwrap_or_else(|| "127.0.0.1".to_string());
+    let bind_host = preset
+        .global
+        .host
+        .unwrap_or_else(|| "127.0.0.1".to_string());
     let server_port = preset.global.port.unwrap_or(port as u32) as u16;
 
     let log_stdout = cache_dir.join("llama-server.log");
@@ -96,7 +99,10 @@ pub async fn serve(
         if let Ok(pid_bytes) = fs::read_to_string(&pid_file).await {
             if let Ok(old_pid) = pid_bytes.trim().parse::<u32>() {
                 if is_llama_server_pid(old_pid).await {
-                    eprintln!("[WARN] Server already running (PID {}). Stopping first.", old_pid);
+                    eprintln!(
+                        "[WARN] Server already running (PID {}). Stopping first.",
+                        old_pid
+                    );
                     let _ = stop().await;
                     fs::remove_file(&pid_file).await.ok();
                     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -281,12 +287,18 @@ pub async fn stop() -> Result<(), color_eyre::Report> {
     let pid = pid_bytes.trim().parse::<u32>()?;
 
     if !is_llama_server_pid(pid).await {
-        println!("[WARN] PID {} is not llama-server (stale PID file). Cleaning up.", pid);
+        println!(
+            "[WARN] PID {} is not llama-server (stale PID file). Cleaning up.",
+            pid
+        );
         fs::remove_file(&pid_file).await.ok();
         return Ok(());
     }
 
-    println!("[PROC] Initiating graceful shutdown (SIGTERM) for PID {}...", pid);
+    println!(
+        "[PROC] Initiating graceful shutdown (SIGTERM) for PID {}...",
+        pid
+    );
     let _ = AsyncCommand::new("kill")
         .args(["-15", &pid.to_string()])
         .output()
@@ -392,7 +404,9 @@ pub fn list() -> Result<(), color_eyre::Report> {
         Some(idx) => println!("{}", presets[idx].name),
         None => {
             println!("Available presets:");
-            println!("===============================================================================");
+            println!(
+                "==============================================================================="
+            );
             for p in &presets {
                 let config_status = if preset::resolve_opencode_config(&p.name).is_some() {
                     "✓"
@@ -407,7 +421,9 @@ pub fn list() -> Result<(), color_eyre::Report> {
                     config_status
                 );
             }
-            println!("===============================================================================");
+            println!(
+                "==============================================================================="
+            );
         }
     }
 

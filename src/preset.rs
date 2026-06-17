@@ -66,9 +66,7 @@ fn parse_slot_section(section_name: &str, values: &HashMap<String, String>) -> S
         ctx_size: values.get("ctx-size").and_then(|v| v.trim().parse().ok()),
         cache_type_k: values.get("cache-type-k").cloned(),
         cache_type_v: values.get("cache-type-v").cloned(),
-        cache_ram: values
-            .get("cache-ram")
-            .and_then(|v| v.trim().parse().ok()),
+        cache_ram: values.get("cache-ram").and_then(|v| v.trim().parse().ok()),
         temp: values.get("temp").and_then(|v| v.trim().parse().ok()),
         top_p: values.get("top-p").and_then(|v| v.trim().parse().ok()),
         min_p: values.get("min-p").and_then(|v| v.trim().parse().ok()),
