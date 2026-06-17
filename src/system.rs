@@ -1,6 +1,7 @@
-use std::process::{Command, Stdio};
+use std::process::Stdio;
+use tokio::process::Command;
 
-pub fn rebase(yes: bool) -> Result<(), color_eyre::Report> {
+pub async fn rebase(yes: bool) -> Result<(), color_eyre::Report> {
     println!("[PROC] Starting Master Host Update Chain...");
     let flake_target = format!("{}/dotfiles/nix", std::env::var("HOME")?);
 
@@ -17,7 +18,8 @@ pub fn rebase(yes: bool) -> Result<(), color_eyre::Report> {
                 "--dry-run",
             ])
             .stdin(Stdio::inherit())
-            .output()?;
+            .output()
+            .await?;
 
         if !output.status.success() {
             eprintln!("Dry run failed. Proceeding anyway...");
@@ -39,17 +41,19 @@ pub fn rebase(yes: bool) -> Result<(), color_eyre::Report> {
             &format!("{}#system", flake_target),
         ])
         .stdin(Stdio::inherit())
-        .status()?;
+        .status()
+        .await?;
 
     println!();
     println!("[PROC] Synchronizing Editor Environment (Neovim)...");
     Command::new("nvim")
         .args(["--headless", "+Lazy! sync", "+qa"])
-        .status()?;
+        .status()
+        .await?;
 
     println!();
     println!("[PROC] Cleaning workspace metadata...");
-    clean()?;
+    clean().await?;
 
     println!();
     println!("[ OK ] Master Host Update Chain Complete.");
@@ -58,8 +62,8 @@ pub fn rebase(yes: bool) -> Result<(), color_eyre::Report> {
     Ok(())
 }
 
-pub fn clean() -> Result<(), color_eyre::Report> {
-    let output = Command::new("which").arg("fd").output()?;
+pub async fn clean() -> Result<(), color_eyre::Report> {
+    let output = Command::new("which").arg("fd").output().await?;
 
     if !output.status.success() {
         eprintln!("[WARN] 'fd' not installed. Skipping .DS_Store cleanup.");
@@ -85,7 +89,7 @@ pub fn clean() -> Result<(), color_eyre::Report> {
         child_args.push("rm");
         child_args.push("-f");
 
-        Command::new("fd").args(&child_args).status()?;
+        Command::new("fd").args(&child_args).status().await?;
     }
 
     println!("[ OK ] Cleanup complete.");

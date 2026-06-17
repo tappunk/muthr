@@ -1,9 +1,9 @@
-use std::fs;
-use std::io::IsTerminal;
 use std::os::fd::{FromRawFd, IntoRawFd};
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
+use tokio::fs;
+use tokio::process::Command as AsyncCommand;
 
 use crate::model;
 use crate::preset;
@@ -13,10 +13,11 @@ pub async fn verify_health(port: u16) -> bool {
     model::verify_health("127.0.0.1", port).await
 }
 
-fn is_llama_server_pid(pid: u32) -> bool {
-    let output = Command::new("ps")
+async fn is_llama_server_pid(pid: u32) -> bool {
+    let output = AsyncCommand::new("ps")
         .args(["-p", &pid.to_string(), "-o", "comm="])
-        .output();
+        .output()
+        .await;
     if let Ok(out) = output {
         let comm = String::from_utf8_lossy(&out.stdout).trim().to_string();
         comm.contains("llama-server")
@@ -63,16 +64,16 @@ pub async fn serve(
         );
     }
 
-    apply_vram_limits();
+    apply_vram_limits().await;
 
     let home = std::env::var("HOME")?;
     let cache_dir = PathBuf::from(&home).join(".cache/muthr");
-    fs::create_dir_all(&cache_dir)?;
+    fs::create_dir_all(&cache_dir).await?;
 
     let tmp_preset = cache_dir.join("active-preset.ini");
-    let raw_content = fs::read_to_string(&preset_path)?;
+    let raw_content = fs::read_to_string(&preset_path).await?;
     let expanded = raw_content.replace("~", &home);
-    fs::write(&tmp_preset, expanded)?;
+    fs::write(&tmp_preset, expanded).await?;
 
     let preset = preset::parse_preset(&preset_path)?;
     let bind_host = preset.global.host.unwrap_or_else(|| "0.0.0.0".to_string());
@@ -84,18 +85,18 @@ pub async fn serve(
     let pid_file = cache_dir.join("llama-server.pid");
 
     if !foreground && pid_file.exists() {
-        if let Ok(pid_bytes) = fs::read_to_string(&pid_file) {
+        if let Ok(pid_bytes) = fs::read_to_string(&pid_file).await {
             if let Ok(old_pid) = pid_bytes.trim().parse::<u32>() {
-                if is_llama_server_pid(old_pid) {
+                if is_llama_server_pid(old_pid).await {
                     eprintln!(
                         "[WARN] Server already running (PID {}). Stopping first.",
                         old_pid
                     );
-                    let _ = stop();
-                    fs::remove_file(&pid_file).ok();
+                    let _ = stop().await;
+                    fs::remove_file(&pid_file).await.ok();
                     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                 } else {
-                    fs::remove_file(&pid_file).ok();
+                    fs::remove_file(&pid_file).await.ok();
                 }
             }
         }
@@ -124,7 +125,7 @@ pub async fn serve(
             args.push("--jinja");
         }
 
-        let mut child = Command::new("llama-server")
+        let mut child = AsyncCommand::new("llama-server")
             .args(&args)
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
@@ -134,9 +135,10 @@ pub async fn serve(
             &target_profile,
             preset_path.to_str().unwrap(),
             &opencode_config_path,
-        )?;
+        )
+        .await?;
 
-        let status = child.wait()?;
+        let status = child.wait().await?;
         if !status.success() {
             eprintln!("[WARN] Server exited with code: {}", status);
         }
@@ -150,11 +152,11 @@ pub async fn serve(
         println!("   Error log       : {:?}", log_stderr);
         println!();
 
-        let stdout_file = fs::OpenOptions::new()
+        let stdout_file = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(&log_stdout)?;
-        let stderr_file = fs::OpenOptions::new()
+        let stderr_file = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(&log_stderr)?;
@@ -178,8 +180,10 @@ pub async fn serve(
             args.push("--jinja");
         }
 
+        // We use std::process::Command here specifically because it allows unsafe pre_exec
+        // to decouple the process session (setsid) before returning control to Tokio.
         let child = unsafe {
-            Command::new("llama-server")
+            std::process::Command::new("llama-server")
                 .args(&args)
                 .stdout(Stdio::from_raw_fd(stdout_fd))
                 .stderr(Stdio::from_raw_fd(stderr_fd))
@@ -191,14 +195,15 @@ pub async fn serve(
         };
 
         let pid = child.id();
-        fs::write(&pid_file, pid.to_string())?;
+        fs::write(&pid_file, pid.to_string()).await?;
         drop(child);
 
         persist_profile(
             &target_profile,
             preset_path.to_str().unwrap(),
             &opencode_config_path,
-        )?;
+        )
+        .await?;
 
         println!("[ OK ] Server started (PID {})", pid);
         println!("   Run 'muthr stop' to stop the server.");
@@ -207,7 +212,7 @@ pub async fn serve(
     }
 }
 
-pub fn stop() -> Result<(), color_eyre::Report> {
+pub async fn stop() -> Result<(), color_eyre::Report> {
     let home = std::env::var("HOME")?;
     let cache_dir = PathBuf::from(&home).join(".cache/muthr");
     let pid_file = cache_dir.join("llama-server.pid");
@@ -217,40 +222,61 @@ pub fn stop() -> Result<(), color_eyre::Report> {
         return Ok(());
     }
 
-    let pid_bytes = fs::read_to_string(&pid_file)?;
+    let pid_bytes = fs::read_to_string(&pid_file).await?;
     let pid = pid_bytes.trim().parse::<u32>()?;
 
-    if !is_llama_server_pid(pid) {
+    if !is_llama_server_pid(pid).await {
         println!(
             "[WARN] PID {} is not llama-server (stale PID file). Cleaning up.",
             pid
         );
-        fs::remove_file(&pid_file).ok();
+        fs::remove_file(&pid_file).await.ok();
         return Ok(());
     }
 
-    let result = Command::new("kill").args(["-9", &pid.to_string()]).output();
+    println!(
+        "[PROC] Initiating graceful shutdown (SIGTERM) for PID {}...",
+        pid
+    );
+    let _ = AsyncCommand::new("kill")
+        .args(["-15", &pid.to_string()])
+        .output()
+        .await;
 
-    match result {
-        Ok(out) if out.status.success() => {
-            println!("[ OK ] Server stopped (PID {})", pid);
-        }
-        Ok(_) => {
-            eprintln!(
-                "[WARN] Could not kill process {} (may have exited already).",
-                pid
-            );
-        }
-        Err(e) => {
-            eprintln!("[WARN] Failed to kill process {}: {}", pid, e);
+    // Grace period for VRAM flushing
+    let mut died = false;
+    for _ in 0..10 {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        if !is_llama_server_pid(pid).await {
+            died = true;
+            break;
         }
     }
 
-    fs::remove_file(&pid_file).ok();
+    if died {
+        println!("[ OK ] Server stopped gracefully. VRAM released.");
+    } else {
+        eprintln!("[WARN] Server did not respond to SIGTERM. Escalating to SIGKILL.");
+        let result = AsyncCommand::new("kill")
+            .args(["-9", &pid.to_string()])
+            .output()
+            .await;
+        match result {
+            Ok(out) if out.status.success() => {
+                println!("[ OK ] Server force-killed.");
+            }
+            Err(e) => {
+                eprintln!("[WARN] Failed to force-kill process {}: {}", pid, e);
+            }
+            _ => {}
+        }
+    }
+
+    fs::remove_file(&pid_file).await.ok();
     Ok(())
 }
 
-pub fn status() -> Result<(), color_eyre::Report> {
+pub async fn status() -> Result<(), color_eyre::Report> {
     let home = std::env::var("HOME")?;
     let profile_path = PathBuf::from(&home).join(".cache/muthr/opencode-profile");
 
@@ -259,7 +285,7 @@ pub fn status() -> Result<(), color_eyre::Report> {
         return Ok(());
     }
 
-    let content = fs::read_to_string(&profile_path)?;
+    let content = fs::read_to_string(&profile_path).await?;
     let mut preset_path = String::new();
     let mut config_path = String::new();
 
@@ -281,10 +307,11 @@ pub fn status() -> Result<(), color_eyre::Report> {
     println!("   Preset:     {}", preset_path);
     println!("   OpenCode:   {}", config_path);
 
-    let is_running = Command::new("pgrep")
+    let is_running = AsyncCommand::new("pgrep")
         .arg("-x")
         .arg("llama-server")
-        .output()?
+        .output()
+        .await?
         .status
         .success();
 
@@ -301,29 +328,6 @@ pub fn list() -> Result<(), color_eyre::Report> {
     let presets = preset::list_presets()?;
     if presets.is_empty() {
         println!("[WARN] No presets found in ~/.config/muthr/llama/presets/");
-        return Ok(());
-    }
-
-    let is_tty = std::io::stdout().is_terminal();
-
-    if !is_tty {
-        println!("Available presets:");
-        println!("===============================================================================");
-        for p in &presets {
-            let config_status = if preset::resolve_opencode_config(&p.name).is_some() {
-                "✓"
-            } else {
-                "✗"
-            };
-            println!(
-                "  {:<30} {} [{}] {}",
-                p.name,
-                p.path.to_string_lossy(),
-                p.slots.len(),
-                config_status
-            );
-        }
-        println!("===============================================================================");
         return Ok(());
     }
 
@@ -385,8 +389,8 @@ fn parse_export_value(line: &str) -> String {
     String::new()
 }
 
-fn apply_vram_limits() {
-    let mem_bytes = sysctl_memsize();
+async fn apply_vram_limits() {
+    let mem_bytes = sysctl_memsize().await;
     let threshold: u64 = 32 * 1024 * 1024 * 1024;
 
     if mem_bytes >= threshold {
@@ -395,10 +399,11 @@ fn apply_vram_limits() {
             "[INFO] High-memory host detected ({}GB). Adjusting wired Metal VRAM limits...",
             gb
         );
-        let status = Command::new("sudo")
+        let status = AsyncCommand::new("sudo")
             .args(["sysctl", "iogpu.wired_limit_mb=43000"])
             .stdin(Stdio::inherit())
-            .output();
+            .output()
+            .await;
 
         match status {
             Ok(out) if out.status.success() => {
@@ -421,8 +426,12 @@ fn apply_vram_limits() {
     }
 }
 
-fn sysctl_memsize() -> u64 {
-    let output = Command::new("sysctl").arg("-n").arg("hw.memsize").output();
+async fn sysctl_memsize() -> u64 {
+    let output = AsyncCommand::new("sysctl")
+        .arg("-n")
+        .arg("hw.memsize")
+        .output()
+        .await;
 
     match output {
         Ok(out) if out.status.success() => {
@@ -434,14 +443,14 @@ fn sysctl_memsize() -> u64 {
     }
 }
 
-fn persist_profile(
+async fn persist_profile(
     _preset: &str,
     preset_path: &str,
     config_path: &Option<PathBuf>,
 ) -> Result<(), color_eyre::Report> {
     let home = std::env::var("HOME")?;
     let cache_dir = PathBuf::from(&home).join(".cache/muthr");
-    fs::create_dir_all(&cache_dir)?;
+    fs::create_dir_all(&cache_dir).await?;
     let config_file = cache_dir.join("opencode-profile");
 
     let config_value = config_path
@@ -453,7 +462,7 @@ fn persist_profile(
         "export LLAMA_ARG_MODELS_PRESET=\"{}\"\nexport OPENCODE_CONFIG=\"{}\"",
         preset_path, config_value
     );
-    fs::write(&config_file, &content).map_err(|e| {
+    fs::write(&config_file, &content).await.map_err(|e| {
         color_eyre::eyre::eyre!(
             "Failed to persist profile to {}: {}",
             config_file.display(),

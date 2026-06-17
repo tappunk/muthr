@@ -1,7 +1,9 @@
-use std::fs;
+use indicatif::{ProgressBar, ProgressStyle};
 use std::path::PathBuf;
+use tokio::fs;
+use tokio::io::AsyncWriteExt;
 
-pub fn download(source: &str, file: Option<&str>) -> Result<(), color_eyre::Report> {
+pub async fn download(source: &str, file: Option<&str>) -> Result<(), color_eyre::Report> {
     let (repo, filename) = match (source, file) {
         (url, None) if url.starts_with("http") && url.contains("huggingface.co") => {
             parse_hf_url(url)?
@@ -27,59 +29,60 @@ pub fn download(source: &str, file: Option<&str>) -> Result<(), color_eyre::Repo
     let target_path = model_subdir.join(&filename);
     let url = format!("https://huggingface.co/{}/resolve/main/{}", repo, filename);
 
-    fs::create_dir_all(&model_subdir)?;
+    fs::create_dir_all(&model_subdir).await?;
 
     if target_path.exists() {
         eprintln!(
-            "[WARN] File exists at {:?}. Resuming download if incomplete...",
+            "[WARN] File exists at {:?}. Aborting to prevent overwrite.",
             target_path
         );
-    } else {
-        println!("[PROC] Fetching: {}", filename);
-        println!("       From:    https://huggingface.co/{}", repo);
+        return Ok(());
     }
+
+    println!("[PROC] Fetching: {}", filename);
+    println!("       From:    https://huggingface.co/{}", repo);
+
+    let mut headers = reqwest::header::HeaderMap::new();
+    if let Ok(token) = std::env::var("HF_TOKEN") {
+        let auth_val = reqwest::header::HeaderValue::from_str(&format!("Bearer {}", token))?;
+        headers.insert(reqwest::header::AUTHORIZATION, auth_val);
+    }
+
+    let client = reqwest::Client::builder()
+        .default_headers(headers)
+        .build()?;
+
+    let mut response = client.get(&url).send().await?;
+
+    if !response.status().is_success() {
+        return Err(color_eyre::eyre::eyre!(
+            "Download failed: {}",
+            response.status()
+        ));
+    }
+
+    let total_size = response.content_length().unwrap_or(0);
+    let pb = ProgressBar::new(total_size);
+    pb.set_style(
+        ProgressStyle::default_bar()
+            .template("{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes}/{total_bytes} ({eta})")?
+            .progress_chars("#>-"),
+    );
 
     let tmp_file = format!("{}.tmp", target_path.display());
-    let mut curl_opts: Vec<String> = vec![
-        "-f".to_string(),
-        "-L".to_string(),
-        "-C".to_string(),
-        "-".to_string(),
-        "-o".to_string(),
-        tmp_file.clone(),
-    ];
+    let mut file = fs::File::create(&tmp_file).await?;
 
-    if let Ok(token) = std::env::var("HF_TOKEN") {
-        curl_opts.push("-H".to_string());
-        curl_opts.push(format!("Authorization: Bearer {}", token));
+    while let Some(chunk) = response.chunk().await? {
+        file.write_all(&chunk).await?;
+        pb.inc(chunk.len() as u64);
     }
 
-    curl_opts.push(url);
+    pb.finish_with_message("Downloaded");
+    fs::rename(&tmp_file, &target_path).await?;
 
-    let mut child = std::process::Command::new("curl")
-        .args(&curl_opts)
-        .stdout(std::process::Stdio::inherit())
-        .stderr(std::process::Stdio::inherit())
-        .spawn()?;
-
-    let status = child.wait()?;
-
-    if status.success() {
-        let tmp_path = PathBuf::from(&tmp_file);
-        if tmp_path.exists() {
-            fs::rename(&tmp_path, &target_path)?;
-        }
-        println!("[ OK ] Download complete.");
-        if let Ok(metadata) = fs::metadata(&target_path) {
-            println!("       Size: {}", human_size(metadata.len()));
-        }
-    } else {
-        eprintln!("[ERR ] Download failed, server returned an error, or process was interrupted.");
-        let tmp_path = PathBuf::from(&tmp_file);
-        if tmp_path.exists() {
-            fs::remove_file(&tmp_path).ok();
-        }
-        return Err(color_eyre::eyre::eyre!("Download failed"));
+    println!("[ OK ] Download complete.");
+    if let Ok(metadata) = fs::metadata(&target_path).await {
+        println!("       Size: {}", human_size(metadata.len()));
     }
 
     Ok(())

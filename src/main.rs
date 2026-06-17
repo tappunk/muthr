@@ -24,7 +24,7 @@ struct Cli {
 enum Commands {
     /// Start llama-server inference engine
     Serve {
-        #[arg(short, long)]
+        #[arg(long)]
         profile: Option<String>,
         #[arg(short, long, default_value_t = 8080)]
         port: u16,
@@ -116,16 +116,16 @@ async fn run() -> Result<(), color_eyre::Report> {
             port,
             foreground,
         } => engine::serve(profile, port, foreground).await?,
-        Commands::Status => engine::status()?,
-        Commands::Stop => engine::stop()?,
+        Commands::Status => engine::status().await?,
+        Commands::Stop => engine::stop().await?,
         Commands::List => engine::list()?,
         Commands::Up { port } => sandbox::up(port).await?,
         Commands::Down => sandbox::down().await?,
         Commands::Ls => sandbox::list().await?,
         Commands::Services { action } => services::run(action).await?,
-        Commands::Download { source, file } => download::download(&source, file.as_deref())?,
-        Commands::Rebase { yes } => system::rebase(yes)?,
-        Commands::Clean => system::clean()?,
+        Commands::Download { source, file } => download::download(&source, file.as_deref()).await?,
+        Commands::Rebase { yes } => system::rebase(yes).await?,
+        Commands::Clean => system::clean().await?,
         Commands::Themes => theme::run()?,
         Commands::Completion { shell } => {
             let mut cmd = Cli::command();
