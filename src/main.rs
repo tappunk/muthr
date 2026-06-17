@@ -28,6 +28,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    #[command(about = "start the llama-server (background daemon or foreground)")]
     Serve {
         #[arg(long)]
         profile: Option<String>,
@@ -35,31 +36,39 @@ enum Commands {
         port: u16,
         #[arg(
             long,
-            help = "Run in foreground (blocking) instead of background daemon"
+            help = "run in foreground (blocking) instead of background daemon"
         )]
         foreground: bool,
     },
 
+    #[command(about = "stop the running llama-server daemon")]
     Stop,
 
+    #[command(about = "show active profile and server status")]
     Status,
 
+    #[command(about = "list available preset profiles")]
     List,
 
+    #[command(about = "provision and start a lima sandbox vm")]
     Up {
         #[arg(short, long, default_value_t = 8080)]
         port: u16,
     },
 
+    #[command(about = "stop the current sandbox vm")]
     Down,
 
+    #[command(about = "list all sandbox vms")]
     Ls,
 
+    #[command(about = "manage mcp services vm (start/stop/status/restart)")]
     Services {
         #[command(subcommand)]
         action: ServicesCommands,
     },
 
+    #[command(about = "download a gguf model from huggingface")]
     Download {
         #[arg(help = "HuggingFace repo or URL")]
         source: String,
@@ -67,26 +76,34 @@ enum Commands {
         file: Option<String>,
     },
 
+    #[command(about = "run darwin-rebuild and sync neovim configuration")]
     Rebase {
-        #[arg(long, help = "Skip dry-run preview and proceed directly")]
+        #[arg(long, help = "skip dry-run preview and proceed directly")]
         yes: bool,
     },
 
+    #[command(about = "remove .DS_Store files from the project")]
     Clean,
 
+    #[command(about = "generate shell completion scripts")]
     Completion {
         #[arg(value_enum)]
         shell: Shell,
     },
 
+    #[command(about = "browse and select ghostty themes")]
     Themes,
 }
 
 #[derive(Subcommand)]
 pub enum ServicesCommands {
+    #[command(about = "start the MCP services VM")]
     Start,
+    #[command(about = "stop the MCP services VM")]
     Stop,
+    #[command(about = "show MCP services VM status")]
     Status,
+    #[command(about = "restart the MCP services VM")]
     Restart,
 }
 
