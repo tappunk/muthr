@@ -13,8 +13,14 @@ use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{generate, Shell};
 
 #[derive(Parser)]
-#[command(name = "muthr")]
-#[command(about = "Local AI Workspace")]
+#[command(
+    name = "muthr",
+    version,
+    author,
+    about,
+    arg_required_else_help = true,
+    propagate_version = true
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -22,7 +28,6 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Start llama-server inference engine
     Serve {
         #[arg(long)]
         profile: Option<String>,
@@ -35,34 +40,26 @@ enum Commands {
         foreground: bool,
     },
 
-    /// Stop llama-server inference engine
     Stop,
 
-    /// Show active engine status and profile info
     Status,
 
-    /// List available preset profiles with config status
     List,
 
-    /// Launch sandboxed opencode session
     Up {
         #[arg(short, long, default_value_t = 8080)]
         port: u16,
     },
 
-    /// Stop current sandbox VM
     Down,
 
-    /// List all sandbox VMs
     Ls,
 
-    /// Manage MCP services VM
     Services {
         #[command(subcommand)]
         action: ServicesCommands,
     },
 
-    /// Download GGUF models from HuggingFace
     Download {
         #[arg(help = "HuggingFace repo or URL")]
         source: String,
@@ -70,34 +67,26 @@ enum Commands {
         file: Option<String>,
     },
 
-    /// Run darwin-rebuild + Neovim sync + system clean
     Rebase {
         #[arg(long, help = "Skip dry-run preview and proceed directly")]
         yes: bool,
     },
 
-    /// Remove .DS_Store files from workspace directories
     Clean,
 
-    /// Generate shell completion file
     Completion {
         #[arg(value_enum)]
         shell: Shell,
     },
 
-    /// Browse and select a Ghostty theme
     Themes,
 }
 
 #[derive(Subcommand)]
 pub enum ServicesCommands {
-    /// Start MCP services VM
     Start,
-    /// Stop MCP services VM
     Stop,
-    /// Show MCP services VM status
     Status,
-    /// Restart MCP services VM
     Restart,
 }
 

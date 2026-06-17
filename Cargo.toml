@@ -18,7 +18,7 @@ categories = [
 ]
 
 [dependencies]
-clap = { version = "4.5", features = ["derive", "env"] }
+clap = { version = "4.5", features = ["derive", "env", "cargo"] }
 clap_complete = "4.5"
 tokio = { version = "1.38", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
