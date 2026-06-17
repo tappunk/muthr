@@ -4,6 +4,7 @@ set -euo pipefail
 # Configuration
 BIN_NAME="muthr"
 TARGET_ARCH="macos-arm64"
+RUST_TARGET="aarch64-apple-darwin"
 
 DRY_RUN=false
 if [[ "${1:-}" == "--dry-run" ]]; then
@@ -14,7 +15,7 @@ fi
 BUMP="${1:-patch}"
 NOTES="${2:-}"
 
-# 1. Validation Checks
+# --- 1. PRE-FLIGHT VALIDATIONS & QUALITY GATES ---
 if [[ ! "$BUMP" =~ ^(patch|minor|major)$ ]]; then
   echo "[ERR] Invalid bump type '$BUMP'. Use: patch, minor, or major"
   exit 1
@@ -30,21 +31,29 @@ if [[ $(git branch --show-current) != "main" ]]; then
   exit 1
 fi
 
-# Ensure remote is reachable and we are up to date
+# Ensure local main is synchronized with remote upstream
 git fetch origin
 if [[ -n $(git log HEAD..origin/main --oneline) ]]; then
   echo "[ERR] Local 'main' is behind 'origin/main'. Pull latest changes first."
   exit 1
 fi
 
-for cmd in cargo gh shasum tar; do
-  if ! command -v "$cmd" &>/dev/null; then
-    echo "[ERR] Required command '$cmd' is not installed."
-    exit 1
-  fi
-done
+# Enforce strict code quality gates locally before making any changes
+echo "[PROC] Executing strict code quality gates..."
+cargo fmt --check || {
+  echo "[ERR] Code formatting violations found. Run 'cargo fmt'."
+  exit 1
+}
+cargo clippy -- -D warnings || {
+  echo "[ERR] Clippy warnings detected. Fix them before releasing."
+  exit 1
+}
+cargo test || {
+  echo "[ERR] Test suite execution failed."
+  exit 1
+}
 
-# 2. Version Parsing
+# --- 2. VERSION DETERMINATION ---
 CURRENT_VERSION=$(grep -m 1 '^version = ' Cargo.toml | sed 's/version = "\(.*\)"/\1/')
 if [[ -z "$CURRENT_VERSION" ]]; then
   echo "[ERR] Could not read current version from Cargo.toml"
@@ -66,72 +75,78 @@ major)
 esac
 NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}"
 
-echo "Preparing release: v$CURRENT_VERSION -> v$NEW_VERSION ($BUMP)"
-
+echo "Preparing Apple Silicon Release: v$CURRENT_VERSION -> v$NEW_VERSION ($BUMP)"
 if $DRY_RUN; then
-  echo ""
-  echo "Dry run — nothing will be executed:"
-  echo "  Would test and build release binary."
-  echo "  Would update Cargo.toml to $NEW_VERSION."
-  echo "  Would commit and tag as v$NEW_VERSION."
-  echo "  Would package ${BIN_NAME}-${NEW_VERSION}-bin-${TARGET_ARCH}.tar.gz and checksum."
-  echo "  Would push tag to GitHub and publish to crates.io."
+  echo "[INFO] Dry run complete. Code is pristine and ready for release."
   exit 0
 fi
 
-# 3. Compilation & Safety Gates
-echo "[PROC] Running tests..."
-cargo test
+# --- 3. TRANSACTION MANAGEMENT (ROLLBACK PROTECTION) ---
+# If any step fails past this point, revert the workspace to prevent broken states
+INITIAL_COMMIT=$(git rev-parse HEAD)
+rollback() {
+  echo ""
+  echo "[CRIT] Release pipeline interrupted! Commencing local rollback..."
+  git reset --hard "$INITIAL_COMMIT"
+  if git rev-parse "v$NEW_VERSION" >/dev/null 2>&1; then
+    git tag -d "v$NEW_VERSION"
+  fi
+  echo "[ OK ] Rollback successful. Local repository state restored cleanly."
+}
+trap rollback ERR
 
-echo "[PROC] Bumping version in Cargo.toml..."
-# Modifies only the first occurrence to avoid hitting dependency versions
-sed -i '' "1,/version =/s/version = \"$CURRENT_VERSION\"/version = \"$NEW_VERSION\"/" Cargo.toml
+# --- 4. ASSET COMPILATION ---
+echo "[PROC] Updating versioning configuration..."
+# Native macOS perl one-liner ensures robust, boundary-safe string swapping
+perl -pi -e "s/version = \"$CURRENT_VERSION\"/version = \"$NEW_VERSION\"/ and \$done=1 if !\$done" Cargo.toml
 
-echo "[PROC] Building release binary (and updating Cargo.lock)..."
-# This simultaneously checks if the build succeeds and updates Cargo.lock with the new version
-cargo build --release
+echo "[PROC] Compiling optimized release binary for Apple Silicon..."
+cargo build --release --target "$RUST_TARGET"
 
-# 4. Git Operations
-echo "[PROC] Committing version bump and tagging..."
-git add Cargo.toml Cargo.lock
-git commit -m "chore: release v$NEW_VERSION"
-git tag "v$NEW_VERSION"
-
-# 5. Asset Packaging
-echo "[PROC] Packaging assets..."
+# --- 5. PACKAGING ---
+echo "[PROC] Packaging distribution archives..."
 ARCHIVE_NAME="${BIN_NAME}-${NEW_VERSION}-bin-${TARGET_ARCH}.tar.gz"
 CHECKSUM_NAME="${ARCHIVE_NAME}.sha256"
 STAGING_DIR="$(mktemp -d)"
 
+# Stage binary alongside core documentation
 mkdir -p "${STAGING_DIR}/${BIN_NAME}"
-cp "target/release/${BIN_NAME}" "${STAGING_DIR}/${BIN_NAME}/"
+cp "target/${RUST_TARGET}/release/${BIN_NAME}" "${STAGING_DIR}/${BIN_NAME}/"
 cp README.md LICENSE "${STAGING_DIR}/${BIN_NAME}/" 2>/dev/null || true
 
+# Compress and generate SHA-256 validation mapping
 tar -czf "$ARCHIVE_NAME" -C "$STAGING_DIR" "${BIN_NAME}"
 shasum -a 256 "$ARCHIVE_NAME" >"$CHECKSUM_NAME"
 rm -rf "$STAGING_DIR"
 
-# 6. Publishing
-echo "[PROC] Pushing to GitHub..."
+# --- 6. ATOMIC COMMITS AND TAGGING ---
+echo "[PROC] Recording version changes to Git history..."
+git add Cargo.toml Cargo.lock
+git commit -m "chore: release v$NEW_VERSION [skip ci]"
+git tag "v$NEW_VERSION"
+
+# --- 7. DEPLOYMENT (POINT OF NO RETURN) ---
+# Disable the local rollback hook now that we are pushing to remote endpoints
+trap - ERR
+
+echo "[PROC] Synchronizing changes with remote origin..."
 git push origin main
 git push origin "v$NEW_VERSION"
 
-echo "[PROC] Creating GitHub Release..."
+echo "[PROC] Deploying GitHub Release and assets..."
 if [[ -n "$NOTES" ]]; then
   gh release create "v$NEW_VERSION" "$ARCHIVE_NAME" "$CHECKSUM_NAME" \
     --title "v$NEW_VERSION" \
     --notes "$NOTES"
 else
-  # Auto-generates release notes from merged PRs if no notes are provided
   gh release create "v$NEW_VERSION" "$ARCHIVE_NAME" "$CHECKSUM_NAME" \
     --title "v$NEW_VERSION" \
     --generate-notes
 fi
 
-echo "[PROC] Publishing to crates.io..."
+echo "[PROC] Publishing crate package to crates.io..."
 cargo publish
 
-echo "[PROC] Cleaning up local assets..."
+# Local asset cleanup
 rm "$ARCHIVE_NAME" "$CHECKSUM_NAME"
-
-echo "[ OK ] Successfully released v$NEW_VERSION!"
+echo "[ SUCCESS ] Release v$NEW_VERSION fully deployed!"
