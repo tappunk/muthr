@@ -123,7 +123,7 @@ rm -rf "$STAGING_DIR"
 echo "[PROC] Recording version changes to Git history..."
 git add Cargo.toml Cargo.lock
 git commit -m "chore: release v$NEW_VERSION [skip ci]"
-git tag "v$NEW_VERSION"
+git tag -a "v$NEW_VERSION" -m "Release v$NEW_VERSION"
 
 # --- 7. DEPLOYMENT (POINT OF NO RETURN) ---
 # Disable the local rollback hook now that we are pushing to remote endpoints
