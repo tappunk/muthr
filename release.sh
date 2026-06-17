@@ -97,8 +97,9 @@ trap rollback ERR
 
 # --- 4. ASSET COMPILATION ---
 echo "[PROC] Updating versioning configuration..."
-# Native macOS perl one-liner ensures robust, boundary-safe string swapping
-perl -pi -e "s/version = \"$CURRENT_VERSION\"/version = \"$NEW_VERSION\"/ and \$done=1 if !\$done" Cargo.toml
+# macOS BSD sed requires an empty string '' argument to modify files in-place without backups
+sed -i '' "s/version = \"$CURRENT_VERSION\"/version = \"$NEW_VERSION\"/" Cargo.toml
+sed -i '' "s/version = \"$CURRENT_VERSION\"/version = \"$NEW_VERSION\"/" flake.nix
 
 echo "[PROC] Compiling optimized release binary for Apple Silicon..."
 cargo build --release --target "$RUST_TARGET"
@@ -121,7 +122,7 @@ rm -rf "$STAGING_DIR"
 
 # --- 6. ATOMIC COMMITS AND TAGGING ---
 echo "[PROC] Recording version changes to Git history..."
-git add Cargo.toml Cargo.lock
+git add Cargo.toml Cargo.lock flake.nix
 git commit -m "chore: release v$NEW_VERSION [skip ci]"
 git tag -a "v$NEW_VERSION" -m "Release v$NEW_VERSION"
 
