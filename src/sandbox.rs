@@ -43,7 +43,16 @@ pub fn resolve_workspace_context() -> Result<(String, PathBuf, PathBuf), color_e
             .ok_or_else(|| color_eyre::eyre::eyre!("Invalid project name"))?
             .to_string();
 
-        let vm_name = format!("{}-sandbox", project_folder);
+        let sanitized: String = project_folder
+            .chars()
+            .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
+            .collect();
+
+        if sanitized.is_empty() {
+            return Err(color_eyre::eyre::eyre!("Sanitized project name is empty"));
+        }
+
+        let vm_name = format!("{}-sandbox", sanitized);
         let mount_point = PathBuf::from(&raw_workspace_root).join(&project_folder);
         Ok((vm_name, mount_point, current_dir))
     } else {

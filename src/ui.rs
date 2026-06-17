@@ -6,11 +6,20 @@ use ratatui::widgets::{HighlightSpacing, List, ListItem, ListState, Row, Table, 
 use ratatui::Frame;
 use std::panic::{self, AssertUnwindSafe};
 
+pub struct TerminalGuard;
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        ratatui::restore();
+    }
+}
+
 pub fn select_list(items: &[&str]) -> Option<usize> {
     if items.is_empty() {
         return None;
     }
 
+    let _guard = TerminalGuard;
     let result = panic::catch_unwind(AssertUnwindSafe(|| {
         ratatui::run::<_, Result<_, color_eyre::Report>>(|terminal| {
             let mut state = ListState::default().with_selected(Some(0));
@@ -36,7 +45,6 @@ pub fn select_list(items: &[&str]) -> Option<usize> {
         })
     }));
 
-    ratatui::restore();
     match result {
         Ok(Ok(opt)) => opt,
         _ => None,
@@ -76,6 +84,7 @@ pub fn select_table(headers: &[&str], rows: Vec<Vec<String>>) -> Option<usize> {
         return None;
     }
 
+    let _guard = TerminalGuard;
     let result = panic::catch_unwind(AssertUnwindSafe(|| {
         ratatui::run::<_, Result<_, color_eyre::Report>>(|terminal| {
             let mut state = TableState::default().with_selected(Some(0));
@@ -99,7 +108,6 @@ pub fn select_table(headers: &[&str], rows: Vec<Vec<String>>) -> Option<usize> {
         })
     }));
 
-    ratatui::restore();
     match result {
         Ok(Ok(opt)) => opt,
         _ => None,
@@ -125,7 +133,7 @@ fn render_table(frame: &mut Frame, headers: &[&str], rows: &[Vec<String>], state
     let widths: Vec<Constraint> = headers.iter().map(|_| Constraint::Length(20)).collect();
     let table_rows: Vec<Row> = rows
         .iter()
-        .map(|row| Row::new(row.iter().map(|s| Line::from(s.as_str()) as Line)))
+        .map(|row| Row::new(row.iter().map(|s| Line::from(s.as_str()))))
         .collect();
 
     let table = Table::new(table_rows, widths)
@@ -141,6 +149,7 @@ fn render_table(frame: &mut Frame, headers: &[&str], rows: &[Vec<String>], state
 }
 
 pub fn confirm(prompt: &str) -> bool {
+    let _guard = TerminalGuard;
     let result = panic::catch_unwind(AssertUnwindSafe(|| {
         ratatui::run::<_, Result<bool, color_eyre::Report>>(|terminal| loop {
             terminal.draw(|frame| render_confirm(frame, prompt))?;
@@ -155,7 +164,6 @@ pub fn confirm(prompt: &str) -> bool {
         })
     }));
 
-    ratatui::restore();
     match result {
         Ok(Ok(val)) => val,
         _ => false,

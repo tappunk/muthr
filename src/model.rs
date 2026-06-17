@@ -56,21 +56,17 @@ fn extract_field(json: &serde_json::Value, field: &str) -> String {
             if let (Some(id), Some(status)) = (item.get("id"), item.get("status")) {
                 if let Some(value) = status.get("value").and_then(|v| v.as_str()) {
                     if value == "loaded" {
-                        match field {
-                            ".data[] | select(.status.value == \"loaded\") | .id" => {
-                                return id.as_str().unwrap_or("").to_string();
+                        if field.contains(".id") {
+                            return id.as_str().unwrap_or("").to_string();
+                        } else if field.contains(".meta.n_ctx") {
+                            if let Some(n_ctx) = item
+                                .get("meta")
+                                .and_then(|m| m.get("n_ctx"))
+                                .and_then(|v| v.as_u64())
+                            {
+                                return n_ctx.to_string();
                             }
-                            ".data[] | select(.status.value == \"loaded\") | .meta.n_ctx" => {
-                                if let Some(n_ctx) = item
-                                    .get("meta")
-                                    .and_then(|m| m.get("n_ctx"))
-                                    .and_then(|v| v.as_u64())
-                                {
-                                    return n_ctx.to_string();
-                                }
-                                return "16000".to_string();
-                            }
-                            _ => {}
+                            return "16000".to_string();
                         }
                     }
                 }

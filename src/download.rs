@@ -89,30 +89,35 @@ pub async fn download(source: &str, file: Option<&str>) -> Result<(), color_eyre
 }
 
 fn parse_hf_url(url: &str) -> Result<(String, String), color_eyre::Report> {
-    let tmp = url.trim_start_matches("https://");
-    let tmp = tmp.trim_start_matches("http://");
+    let tmp = url
+        .trim_start_matches("https://")
+        .trim_start_matches("http://");
     let tmp = tmp
         .strip_prefix("huggingface.co/")
         .ok_or_else(|| color_eyre::eyre::eyre!("Invalid HuggingFace URL format"))?;
 
-    let repo_end = if tmp.contains("/blob/main/") {
-        tmp.find("/blob/main/").unwrap()
-    } else if tmp.contains("/raw/main/") {
-        tmp.find("/raw/main/").unwrap()
-    } else {
-        return Err(color_eyre::eyre::eyre!("Invalid HuggingFace URL format"));
-    };
+    let separators = ["/blob/main/", "/raw/main/"];
+    let mut split_res = None;
+    for sep in separators {
+        if let Some(idx) = tmp.find(sep) {
+            let repo = tmp[..idx].to_string();
+            let filename = tmp[idx + sep.len()..].to_string();
+            split_res = Some((repo, filename));
+            break;
+        }
+    }
 
-    let repo = &tmp[..repo_end];
-    let base = &tmp[repo_end + 11..]; // skip /blob/main/ or /raw/main/
+    let (repo, filename) = split_res.ok_or_else(|| {
+        color_eyre::eyre::eyre!("Invalid HuggingFace URL architecture structure layout")
+    })?;
 
-    let filename = if !base.is_empty() {
-        base.to_string()
-    } else {
-        url.rsplit('/').next().unwrap_or("").to_string()
-    };
+    if filename.is_empty() {
+        return Err(color_eyre::eyre::eyre!(
+            "Missing filename target in routing path resolution"
+        ));
+    }
 
-    Ok((repo.to_string(), filename))
+    Ok((repo, filename))
 }
 
 fn human_size(bytes: u64) -> String {

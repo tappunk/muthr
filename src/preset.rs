@@ -47,7 +47,11 @@ pub struct Preset {
 fn parse_slot_section(section_name: &str, values: &HashMap<String, String>) -> Slot {
     let parts: Vec<&str> = section_name.splitn(2, '-').collect();
     let index = parts[0].parse().unwrap_or(0);
-    let name = parts[1].to_string();
+    let name = if parts.len() > 1 {
+        parts[1].to_string()
+    } else {
+        section_name.to_string()
+    };
 
     let load_on_startup = values
         .get("load-on-startup")
@@ -122,55 +126,45 @@ pub fn parse_preset(path: &Path) -> Result<Preset, color_eyre::Report> {
     let content = fs::read_to_string(path)?;
 
     let mut global_values: HashMap<String, String> = HashMap::new();
-    let mut current_section = String::from("[*]");
+    let mut current_section = String::from("*");
+    let mut sections: Vec<(String, HashMap<String, String>)> = Vec::new();
+    let mut current_values: HashMap<String, String> = HashMap::new();
+
     for line in content.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() || trimmed.starts_with('#') {
             continue;
         }
         if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            current_section = trimmed[1..trimmed.len() - 1].to_string();
+            let next_section = trimmed[1..trimmed.len() - 1].to_string();
+            if current_section == "*" {
+                global_values.clone_from(&current_values);
+            } else {
+                sections.push((current_section.clone(), current_values.clone()));
+            }
+            current_values.clear();
+            current_section = next_section;
             continue;
         }
         if let Some(eq_pos) = trimmed.find('=') {
             let key = trimmed[..eq_pos].trim().to_string();
             let value = trimmed[eq_pos + 1..].trim().to_string();
-            if current_section.as_str() == "[*]" {
-                global_values.insert(key, value);
-            }
+            current_values.insert(key, value);
         }
+    }
+
+    if current_section == "*" {
+        global_values.clone_from(&current_values);
+    } else {
+        sections.push((current_section, current_values));
     }
 
     let mut slots: Vec<Slot> = Vec::new();
-    let mut current_slot_name = String::new();
-    let mut slot_values: HashMap<String, String> = HashMap::new();
-
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
+    for (sec_name, sec_vals) in sections {
+        if sec_name != "*" {
+            let slot = parse_slot_section(&sec_name, &sec_vals);
+            slots.push(slot);
         }
-        if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            if !current_slot_name.is_empty() && !current_slot_name.starts_with('*') {
-                let slot = parse_slot_section(&current_slot_name, &slot_values);
-                slots.push(slot);
-            }
-            current_slot_name = trimmed[1..trimmed.len() - 1].to_string();
-            slot_values.clear();
-            continue;
-        }
-        if !current_slot_name.starts_with('*') {
-            if let Some(eq_pos) = trimmed.find('=') {
-                let key = trimmed[..eq_pos].trim().to_string();
-                let value = trimmed[eq_pos + 1..].trim().to_string();
-                slot_values.insert(key, value);
-            }
-        }
-    }
-
-    if !current_slot_name.is_empty() && !current_slot_name.starts_with('*') {
-        let slot = parse_slot_section(&current_slot_name, &slot_values);
-        slots.push(slot);
     }
 
     slots.sort_by_key(|s| s.index);

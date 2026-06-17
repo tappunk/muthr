@@ -72,7 +72,7 @@ pub async fn serve(
 
     let tmp_preset = cache_dir.join("active-preset.ini");
     let raw_content = fs::read_to_string(&preset_path).await?;
-    let expanded = raw_content.replace("~", &home);
+    let expanded = raw_content.replace('~', &home);
     fs::write(&tmp_preset, expanded).await?;
 
     let preset = preset::parse_preset(&preset_path)?;
@@ -180,8 +180,13 @@ pub async fn serve(
             args.push("--jinja");
         }
 
-        // We use std::process::Command here specifically because it allows unsafe pre_exec
-        // to decouple the process session (setsid) before returning control to Tokio.
+        persist_profile(
+            &target_profile,
+            preset_path.to_str().unwrap(),
+            &opencode_config_path,
+        )
+        .await?;
+
         let child = unsafe {
             std::process::Command::new("llama-server")
                 .args(&args)
@@ -191,24 +196,29 @@ pub async fn serve(
                     let _ = libc::setsid();
                     Ok(())
                 })
-                .spawn()?
+                .spawn()
         };
 
-        let pid = child.id();
-        fs::write(&pid_file, pid.to_string()).await?;
-        drop(child);
-
-        persist_profile(
-            &target_profile,
-            preset_path.to_str().unwrap(),
-            &opencode_config_path,
-        )
-        .await?;
-
-        println!("[ OK ] Server started (PID {})", pid);
-        println!("   Run 'muthr stop' to stop the server.");
-
-        Ok(())
+        match child {
+            Ok(c) => {
+                let pid = c.id();
+                if let Err(e) = fs::write(&pid_file, pid.to_string()).await {
+                    eprintln!(
+                        "[ERR] Failed to write PID file, killing child process: {}",
+                        e
+                    );
+                    let _ = AsyncCommand::new("kill")
+                        .args(["-9", &pid.to_string()])
+                        .output()
+                        .await;
+                    return Err(e.into());
+                }
+                println!("[ OK ] Server started (PID {})", pid);
+                println!("   Run 'muthr stop' to stop the server.");
+                Ok(())
+            }
+            Err(e) => Err(e.into()),
+        }
     }
 }
 
@@ -243,7 +253,6 @@ pub async fn stop() -> Result<(), color_eyre::Report> {
         .output()
         .await;
 
-    // Grace period for VRAM flushing
     let mut died = false;
     for _ in 0..10 {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -265,10 +274,16 @@ pub async fn stop() -> Result<(), color_eyre::Report> {
             Ok(out) if out.status.success() => {
                 println!("[ OK ] Server force-killed.");
             }
+            Ok(out) => {
+                eprintln!(
+                    "[WARN] Failed to force-kill process {}: exit code {:?}",
+                    pid,
+                    out.status.code()
+                );
+            }
             Err(e) => {
                 eprintln!("[WARN] Failed to force-kill process {}: {}", pid, e);
             }
-            _ => {}
         }
     }
 
@@ -462,7 +477,7 @@ async fn persist_profile(
         "export LLAMA_ARG_MODELS_PRESET=\"{}\"\nexport OPENCODE_CONFIG=\"{}\"",
         preset_path, config_value
     );
-    fs::write(&config_file, &content).await.map_err(|e| {
+    fs::write(&config_file, content).await.map_err(|e| {
         color_eyre::eyre::eyre!(
             "Failed to persist profile to {}: {}",
             config_file.display(),

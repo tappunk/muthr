@@ -1,8 +1,8 @@
 # muthr
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![GitHub Release](https://img.shields.io/github/v/release/tappunk/muthr)](https://github.com/tappunk/muthr/releases)
-[![Crates.io](https://img.shields.io/crates/v/muthr?color=orange)](https://crates.io/crates/muthr)
+[![Crates.io Version](https://img.shields.io/crates/v/muthr.svg?color=orange)](https://crates.io/crates/muthr)
+[![GitHub Release](https://img.shields.io/github/v/release/tappunk/muthr?color=blue)](https://github.com/tappunk/muthr/releases)
 
 **muthr** runs autonomous AI agents inside isolated VMs on Apple Silicon. Running coding agents on your host exposes SSH keys and system root to unpredictable tool calls.
 
