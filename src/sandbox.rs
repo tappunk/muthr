@@ -12,23 +12,32 @@ use crate::ui;
 
 pub fn resolve_workspace_context() -> Result<(String, PathBuf, PathBuf), color_eyre::Report> {
     let current_dir = std::env::current_dir()?;
-    let home = std::env::var("HOME")?;
-    let workspace_root = std::env::var("OPENCODE_WORKSPACE_ROOT")
-        .unwrap_or_else(|_| format!("{}/src/projects", home));
+    let canonical_current = std::fs::canonicalize(&current_dir)?;
 
-    if current_dir.starts_with(format!("{}/dotfiles", home)) {
+    let home = std::env::var("HOME")?;
+    
+    let raw_workspace_root = std::env::var("OPENCODE_WORKSPACE_ROOT")
+        .unwrap_or_else(|_| format!("{}/src/projects", home));
+    let canonical_workspace = std::fs::canonicalize(Path::new(&raw_workspace_root))
+        .unwrap_or_else(|_| PathBuf::from(&raw_workspace_root));
+
+    let dotfiles_path = PathBuf::from(format!("{}/dotfiles", home));
+    let canonical_dotfiles = std::fs::canonicalize(&dotfiles_path)
+        .unwrap_or_else(|_| dotfiles_path.clone());
+
+    if canonical_current.starts_with(&canonical_dotfiles) {
         Ok((
             "dotfiles-sandbox".to_string(),
-            PathBuf::from(format!("{}/dotfiles", home)),
-            PathBuf::from(format!("{}/dotfiles", home)),
+            dotfiles_path, 
+            current_dir,   
         ))
-    } else if current_dir.starts_with(&workspace_root) {
-        if current_dir == Path::new(&workspace_root) {
+    } else if canonical_current.starts_with(&canonical_workspace) {
+        if canonical_current == canonical_workspace {
             return Err(color_eyre::eyre::eyre!(
                 "Navigate into a project directory first."
             ));
         }
-        let relative = current_dir.strip_prefix(&workspace_root)?;
+        let relative = canonical_current.strip_prefix(&canonical_workspace)?;
         let project_folder = relative
             .components()
             .next()
@@ -39,7 +48,7 @@ pub fn resolve_workspace_context() -> Result<(String, PathBuf, PathBuf), color_e
             .to_string();
 
         let vm_name = format!("{}-sandbox", project_folder);
-        let mount_point = PathBuf::from(&workspace_root).join(&project_folder);
+        let mount_point = PathBuf::from(&raw_workspace_root).join(&project_folder);
         Ok((vm_name, mount_point, current_dir))
     } else {
         Err(color_eyre::eyre::eyre!(
@@ -124,8 +133,8 @@ async fn vm_create(
 
     let content = fs::read_to_string(&template_path).await?;
     let expanded = content
-        .replace("__WORKSPACE_ROOT__", workspace_root.to_str().unwrap())
-        .replace("__MOUNT_POINT__", mount_point.to_str().unwrap());
+        .replace("__WORKSPACE_ROOT__", workspace_root.to_str().unwrap_or_default())
+        .replace("__MOUNT_POINT__", mount_point.to_str().unwrap_or_default());
 
     println!(
         "[PROC] VM '{}' not found. Creating and starting...",
@@ -206,8 +215,12 @@ async fn run_provision(vm_name: &str, script_name: &str) -> Result<(), color_eyr
 
     println!("[PROC] Running provision: {}...", script_name);
 
+    let script_str = host_script
+        .to_str()
+        .ok_or_else(|| color_eyre::eyre::eyre!("Invalid UTF-8 in provision script path"))?;
+
     let status = Command::new("bash")
-        .arg(host_script.to_str().unwrap())
+        .arg(script_str)
         .arg(vm_name)
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
@@ -348,7 +361,7 @@ pub async fn up(port: u16) -> Result<(), color_eyre::Report> {
         .args([
             "shell",
             "--workdir",
-            workdir.to_str().unwrap(),
+            workdir.to_str().unwrap_or("/tmp"),
             &vm_name,
             "--",
             "env",

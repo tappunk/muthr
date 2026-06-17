@@ -101,7 +101,13 @@ pub enum ServicesCommands {
     Restart,
 }
 
-fn run() -> Result<(), color_eyre::Report> {
+#[tokio::main]
+async fn main() -> color_eyre::Result<()> {
+    color_eyre::install()?;
+    run().await
+}
+
+async fn run() -> Result<(), color_eyre::Report> {
     let cli = Cli::parse();
 
     match cli.command {
@@ -109,14 +115,14 @@ fn run() -> Result<(), color_eyre::Report> {
             profile,
             port,
             foreground,
-        } => engine::serve(profile, port, foreground)?,
+        } => engine::serve(profile, port, foreground).await?,
         Commands::Status => engine::status()?,
         Commands::Stop => engine::stop()?,
         Commands::List => engine::list()?,
-        Commands::Up { port } => tokio::runtime::Runtime::new()?.block_on(sandbox::up(port))?,
-        Commands::Down => tokio::runtime::Runtime::new()?.block_on(sandbox::down())?,
-        Commands::Ls => tokio::runtime::Runtime::new()?.block_on(sandbox::list())?,
-        Commands::Services { action } => services::run(action)?,
+        Commands::Up { port } => sandbox::up(port).await?,
+        Commands::Down => sandbox::down().await?,
+        Commands::Ls => sandbox::list().await?,
+        Commands::Services { action } => services::run(action).await?,
         Commands::Download { source, file } => download::download(&source, file.as_deref())?,
         Commands::Rebase { yes } => system::rebase(yes)?,
         Commands::Clean => system::clean()?,
@@ -128,9 +134,4 @@ fn run() -> Result<(), color_eyre::Report> {
     }
 
     Ok(())
-}
-
-fn main() -> color_eyre::Result<()> {
-    color_eyre::install()?;
-    run()
 }

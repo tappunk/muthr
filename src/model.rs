@@ -21,10 +21,13 @@ pub struct ModelStatus {
 }
 
 pub async fn verify_health(host: &str, port: u16) -> bool {
-    let client = reqwest::Client::builder()
+    let client = match reqwest::Client::builder()
         .timeout(Duration::from_secs(2))
         .build()
-        .unwrap();
+    {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
 
     let url = format!("http://{}:{}/health", host, port);
     client.get(&url).send().await.is_ok()

@@ -4,17 +4,17 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use tempfile::NamedTempFile;
 
-pub fn run(action: crate::ServicesCommands) -> Result<(), color_eyre::Report> {
+pub async fn run(action: crate::ServicesCommands) -> Result<(), color_eyre::Report> {
     match action {
-        crate::ServicesCommands::Start => start()?,
-        crate::ServicesCommands::Stop => stop()?,
-        crate::ServicesCommands::Status => status()?,
-        crate::ServicesCommands::Restart => restart()?,
+        crate::ServicesCommands::Start => start().await?,
+        crate::ServicesCommands::Stop => stop().await?,
+        crate::ServicesCommands::Status => status().await?,
+        crate::ServicesCommands::Restart => restart().await?,
     }
     Ok(())
 }
 
-pub fn start() -> Result<(), color_eyre::Report> {
+pub async fn start() -> Result<(), color_eyre::Report> {
     println!("[PROC] Starting MCP VM...");
 
     let vm_name = "mcp-services-vm";
@@ -106,7 +106,7 @@ pub fn start() -> Result<(), color_eyre::Report> {
     Ok(())
 }
 
-pub fn stop() -> Result<(), color_eyre::Report> {
+pub async fn stop() -> Result<(), color_eyre::Report> {
     let vm_name = "mcp-services-vm";
 
     if !is_vm_exists(vm_name) {
@@ -133,7 +133,7 @@ pub fn stop() -> Result<(), color_eyre::Report> {
     Ok(())
 }
 
-pub fn status() -> Result<(), color_eyre::Report> {
+pub async fn status() -> Result<(), color_eyre::Report> {
     let vm_name = "mcp-services-vm";
 
     println!("[INFO] MCP VM Status:");
@@ -158,21 +158,16 @@ pub fn status() -> Result<(), color_eyre::Report> {
         })
         .unwrap_or_else(|| "Unknown".to_string());
 
-    println!("   VM:             ● {}", status);
+    println!("   VM:            ● {}", status);
     println!("===============================================================================");
 
     Ok(())
 }
 
-pub fn restart() -> Result<(), color_eyre::Report> {
-    stop()?;
-    tokio::runtime::Builder::new_current_thread()
-        .enable_time()
-        .build()?
-        .block_on(async {
-            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-        });
-    start()?;
+pub async fn restart() -> Result<(), color_eyre::Report> {
+    stop().await?;
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    start().await?;
     Ok(())
 }
 

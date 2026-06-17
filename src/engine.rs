@@ -13,7 +13,19 @@ pub async fn verify_health(port: u16) -> bool {
     model::verify_health("127.0.0.1", port).await
 }
 
-pub fn serve(
+fn is_llama_server_pid(pid: u32) -> bool {
+    let output = Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "comm="])
+        .output();
+    if let Ok(out) = output {
+        let comm = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        comm.contains("llama-server")
+    } else {
+        false
+    }
+}
+
+pub async fn serve(
     profile: Option<String>,
     port: u16,
     foreground: bool,
@@ -74,21 +86,16 @@ pub fn serve(
     if !foreground && pid_file.exists() {
         if let Ok(pid_bytes) = fs::read_to_string(&pid_file) {
             if let Ok(old_pid) = pid_bytes.trim().parse::<u32>() {
-                let test = Command::new("kill")
-                    .args(["-0", &old_pid.to_string()])
-                    .output();
-                if let Ok(out) = test {
-                    if out.status.success() {
-                        eprintln!(
-                            "[WARN] Server already running (PID {}). Stopping first.",
-                            old_pid
-                        );
-                        let _ = stop();
-                        fs::remove_file(&pid_file).ok();
-                        tokio::runtime::Runtime::new().unwrap().block_on(async {
-                            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                        });
-                    }
+                if is_llama_server_pid(old_pid) {
+                    eprintln!(
+                        "[WARN] Server already running (PID {}). Stopping first.",
+                        old_pid
+                    );
+                    let _ = stop();
+                    fs::remove_file(&pid_file).ok();
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                } else {
+                    fs::remove_file(&pid_file).ok();
                 }
             }
         }
@@ -211,7 +218,13 @@ pub fn stop() -> Result<(), color_eyre::Report> {
     }
 
     let pid_bytes = fs::read_to_string(&pid_file)?;
-    let pid = pid_bytes.trim().parse::<i32>()?;
+    let pid = pid_bytes.trim().parse::<u32>()?;
+
+    if !is_llama_server_pid(pid) {
+        println!("[WARN] PID {} is not llama-server (stale PID file). Cleaning up.", pid);
+        fs::remove_file(&pid_file).ok();
+        return Ok(());
+    }
 
     let result = Command::new("kill").args(["-9", &pid.to_string()]).output();
 
