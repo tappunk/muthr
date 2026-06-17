@@ -26,6 +26,15 @@ async fn is_llama_server_pid(pid: u32) -> bool {
     }
 }
 
+fn expand_path(path: &str) -> String {
+    if path.starts_with('~') {
+        if let Ok(home) = std::env::var("HOME") {
+            return path.replacen('~', &home, 1);
+        }
+    }
+    path.to_string()
+}
+
 pub async fn serve(
     profile: Option<String>,
     port: u16,
@@ -76,9 +85,8 @@ pub async fn serve(
     fs::write(&tmp_preset, expanded).await?;
 
     let preset = preset::parse_preset(&preset_path)?;
-    let bind_host = preset.global.host.unwrap_or_else(|| "0.0.0.0".to_string());
+    let bind_host = preset.global.host.unwrap_or_else(|| "127.0.0.1".to_string());
     let server_port = preset.global.port.unwrap_or(port as u32) as u16;
-    let use_jinja = preset.slots.first().is_some_and(|s| s.jinja == Some(true));
 
     let log_stdout = cache_dir.join("llama-server.log");
     let log_stderr = cache_dir.join("llama-server-err.log");
@@ -88,10 +96,7 @@ pub async fn serve(
         if let Ok(pid_bytes) = fs::read_to_string(&pid_file).await {
             if let Ok(old_pid) = pid_bytes.trim().parse::<u32>() {
                 if is_llama_server_pid(old_pid).await {
-                    eprintln!(
-                        "[WARN] Server already running (PID {}). Stopping first.",
-                        old_pid
-                    );
+                    eprintln!("[WARN] Server already running (PID {}). Stopping first.", old_pid);
                     let _ = stop().await;
                     fs::remove_file(&pid_file).await.ok();
                     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -102,50 +107,123 @@ pub async fn serve(
         }
     }
 
-    if foreground {
-        println!("[PROC] Starting llama.cpp Server via muthr engine...");
-        println!("   Binding Address : http://{}:{}", bind_host, server_port);
-        println!("   Profile Target  : {:?}", preset_path);
-        println!("   Press Ctrl+C to stop the server.");
-        println!();
+    // === Build direct mode arguments ===
+    let mut args: Vec<String> = vec![
+        "--host".to_string(),
+        bind_host.clone(),
+        "--port".to_string(),
+        server_port.to_string(),
+        "--prio".to_string(),
+        "2".to_string(),
+        "--n-gpu-layers".to_string(),
+        preset.global.n_gpu_layers.to_string(),
+    ];
 
-        let preset_str = tmp_preset.to_string_lossy();
-        let port_str = server_port.to_string();
-        let mut args: Vec<&str> = vec![
-            "--models-preset",
-            &preset_str,
-            "--port",
-            &port_str,
-            "--host",
-            &bind_host,
-            "--prio",
-            "2",
-        ];
-        if use_jinja {
-            args.push("--jinja");
+    if preset.global.flash_attn {
+        args.push("--flash-attn".to_string());
+        args.push("on".to_string());
+    }
+    if preset.global.mlock {
+        args.push("--mlock".to_string());
+    }
+
+    if let Some(slot) = preset.slots.first() {
+        if let Some(model_path) = &slot.model_path {
+            let expanded_model = expand_path(&model_path.to_string_lossy());
+            args.push("--model".to_string());
+            args.push(expanded_model);
         }
 
+        if let Some(ctx) = slot.ctx_size {
+            args.push("--ctx-size".to_string());
+            args.push(ctx.to_string());
+        }
+        if let Some(k) = &slot.cache_type_k {
+            args.push("--cache-type-k".to_string());
+            args.push(k.clone());
+        }
+        if let Some(v) = &slot.cache_type_v {
+            args.push("--cache-type-v".to_string());
+            args.push(v.clone());
+        }
+        if let Some(cache_ram) = slot.cache_ram {
+            args.push("--cache-ram".to_string());
+            args.push(cache_ram.to_string());
+        }
+        if let Some(temp) = slot.temp {
+            args.push("--temperature".to_string());
+            args.push(temp.to_string());
+        }
+        if let Some(top_p) = slot.top_p {
+            args.push("--top-p".to_string());
+            args.push(top_p.to_string());
+        }
+        if let Some(min_p) = slot.min_p {
+            args.push("--min-p".to_string());
+            args.push(min_p.to_string());
+        }
+        if let Some(top_k) = slot.top_k {
+            args.push("--top-k".to_string());
+            args.push(top_k.to_string());
+        }
+        if let Some(rp) = slot.repeat_penalty {
+            args.push("--repeat-penalty".to_string());
+            args.push(rp.to_string());
+        }
+        if slot.jinja == Some(true) {
+            args.push("--jinja".to_string());
+        }
+        if let Some(parallel) = slot.parallel {
+            args.push("--parallel".to_string());
+            args.push(parallel.to_string());
+        }
+    }
+
+    if let Some(b) = preset.global.batch_size {
+        args.push("--batch-size".to_string());
+        args.push(b.to_string());
+    }
+    if let Some(ub) = preset.global.ubatch_size {
+        args.push("--ubatch-size".to_string());
+        args.push(ub.to_string());
+    }
+    if let Some(t) = preset.global.threads {
+        args.push("--threads".to_string());
+        args.push(t.to_string());
+    }
+    if let Some(tb) = preset.global.threads_batch {
+        args.push("--threads-batch".to_string());
+        args.push(tb.to_string());
+    }
+
+    let args_str: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+
+    persist_profile(
+        &target_profile,
+        preset_path.to_str().unwrap(),
+        &opencode_config_path,
+    )
+    .await?;
+
+    if foreground {
+        println!("[PROC] Starting llama.cpp Server (Direct Mode)...");
+        println!("   Binding Address : http://{}:{}", bind_host, server_port);
+        println!("   Profile Target  : {:?}", preset_path);
+        println!("   Press Ctrl+C to stop the server.\n");
+
         let mut child = AsyncCommand::new("llama-server")
-            .args(&args)
+            .args(&args_str)
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
             .spawn()?;
-
-        persist_profile(
-            &target_profile,
-            preset_path.to_str().unwrap(),
-            &opencode_config_path,
-        )
-        .await?;
 
         let status = child.wait().await?;
         if !status.success() {
             eprintln!("[WARN] Server exited with code: {}", status);
         }
-
         Ok(())
     } else {
-        println!("[PROC] Starting llama.cpp Server in background...");
+        println!("[PROC] Starting llama.cpp Server in background (Direct Mode)...");
         println!("   Binding Address : http://{}:{}", bind_host, server_port);
         println!("   Profile Target  : {:?}", preset_path);
         println!("   Log file        : {:?}", log_stdout);
@@ -164,32 +242,9 @@ pub async fn serve(
         let stdout_fd = stdout_file.into_raw_fd();
         let stderr_fd = stderr_file.into_raw_fd();
 
-        let preset_str = tmp_preset.to_string_lossy();
-        let port_str = server_port.to_string();
-        let mut args: Vec<&str> = vec![
-            "--models-preset",
-            &preset_str,
-            "--port",
-            &port_str,
-            "--host",
-            &bind_host,
-            "--prio",
-            "2",
-        ];
-        if use_jinja {
-            args.push("--jinja");
-        }
-
-        persist_profile(
-            &target_profile,
-            preset_path.to_str().unwrap(),
-            &opencode_config_path,
-        )
-        .await?;
-
         let child = unsafe {
             std::process::Command::new("llama-server")
-                .args(&args)
+                .args(&args_str)
                 .stdout(Stdio::from_raw_fd(stdout_fd))
                 .stderr(Stdio::from_raw_fd(stderr_fd))
                 .pre_exec(|| {
@@ -202,17 +257,7 @@ pub async fn serve(
         match child {
             Ok(c) => {
                 let pid = c.id();
-                if let Err(e) = fs::write(&pid_file, pid.to_string()).await {
-                    eprintln!(
-                        "[ERR] Failed to write PID file, killing child process: {}",
-                        e
-                    );
-                    let _ = AsyncCommand::new("kill")
-                        .args(["-9", &pid.to_string()])
-                        .output()
-                        .await;
-                    return Err(e.into());
-                }
+                fs::write(&pid_file, pid.to_string()).await?;
                 println!("[ OK ] Server started (PID {})", pid);
                 println!("   Run 'muthr stop' to stop the server.");
                 Ok(())
@@ -236,18 +281,12 @@ pub async fn stop() -> Result<(), color_eyre::Report> {
     let pid = pid_bytes.trim().parse::<u32>()?;
 
     if !is_llama_server_pid(pid).await {
-        println!(
-            "[WARN] PID {} is not llama-server (stale PID file). Cleaning up.",
-            pid
-        );
+        println!("[WARN] PID {} is not llama-server (stale PID file). Cleaning up.", pid);
         fs::remove_file(&pid_file).await.ok();
         return Ok(());
     }
 
-    println!(
-        "[PROC] Initiating graceful shutdown (SIGTERM) for PID {}...",
-        pid
-    );
+    println!("[PROC] Initiating graceful shutdown (SIGTERM) for PID {}...", pid);
     let _ = AsyncCommand::new("kill")
         .args(["-15", &pid.to_string()])
         .output()
@@ -266,25 +305,11 @@ pub async fn stop() -> Result<(), color_eyre::Report> {
         println!("[ OK ] Server stopped gracefully. VRAM released.");
     } else {
         eprintln!("[WARN] Server did not respond to SIGTERM. Escalating to SIGKILL.");
-        let result = AsyncCommand::new("kill")
+        let _ = AsyncCommand::new("kill")
             .args(["-9", &pid.to_string()])
             .output()
             .await;
-        match result {
-            Ok(out) if out.status.success() => {
-                println!("[ OK ] Server force-killed.");
-            }
-            Ok(out) => {
-                eprintln!(
-                    "[WARN] Failed to force-kill process {}: exit code {:?}",
-                    pid,
-                    out.status.code()
-                );
-            }
-            Err(e) => {
-                eprintln!("[WARN] Failed to force-kill process {}: {}", pid, e);
-            }
-        }
+        println!("[ OK ] Server force-killed.");
     }
 
     fs::remove_file(&pid_file).await.ok();
@@ -364,14 +389,10 @@ pub fn list() -> Result<(), color_eyre::Report> {
     let headers = vec!["Preset", "Path", "Slots", "Config"];
 
     match ui::select_table(&headers, rows) {
-        Some(idx) => {
-            println!("{}", presets[idx].name);
-        }
+        Some(idx) => println!("{}", presets[idx].name),
         None => {
             println!("Available presets:");
-            println!(
-                "==============================================================================="
-            );
+            println!("===============================================================================");
             for p in &presets {
                 let config_status = if preset::resolve_opencode_config(&p.name).is_some() {
                     "✓"
@@ -386,9 +407,7 @@ pub fn list() -> Result<(), color_eyre::Report> {
                     config_status
                 );
             }
-            println!(
-                "==============================================================================="
-            );
+            println!("===============================================================================");
         }
     }
 
@@ -414,30 +433,10 @@ async fn apply_vram_limits() {
             "[INFO] High-memory host detected ({}GB). Adjusting wired Metal VRAM limits...",
             gb
         );
-        let status = AsyncCommand::new("sudo")
-            .args(["sysctl", "iogpu.wired_limit_mb=43000"])
-            .stdin(Stdio::inherit())
+        let _ = AsyncCommand::new("sudo")
+            .args(["sysctl", "-w", "iogpu.wired_limit_mb=43000"])
             .output()
             .await;
-
-        match status {
-            Ok(out) if out.status.success() => {
-                println!("[ OK ] VRAM limits adjusted.");
-            }
-            Ok(out) => {
-                let stderr = String::from_utf8_lossy(&out.stderr);
-                eprintln!("[WARN] Failed to adjust VRAM limits: {}", stderr.trim());
-            }
-            Err(e) => {
-                eprintln!("[WARN] Failed to execute sysctl: {}", e);
-            }
-        }
-    } else {
-        let gb = mem_bytes / 1024 / 1024 / 1024;
-        println!(
-            "[INFO] Standard host configuration detected ({}GB). Skipping VRAM limit override.",
-            gb
-        );
     }
 }
 
