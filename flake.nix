@@ -9,54 +9,39 @@
     let
       system = "aarch64-darwin";
       pkgs = import nixpkgs { inherit system; };
-      
-      cargoToml = builtins.fromTOML (builtins.readFile ./Cargo.toml);
     in
     {
-      packages.${system} = {
-        default = pkgs.rustPlatform.buildRustPackage {
-          pname = cargoToml.package.name;
-          version = cargoToml.package.version;
+      packages.${system}.default = pkgs.rustPlatform.buildRustPackage {
+        pname = "muthr";
+        version = "0.1.7";
+        src = ./.;
 
-          src = ./.;
-
-          cargoLock = {
-            lockFile = ./Cargo.lock;
-          };
-
-          nativeBuildInputs = [ pkgs.installShellFiles ];
-
-          buildInputs = with pkgs.darwin.apple_sdk.frameworks; [
-            Security
-            SystemConfiguration
-          ];
-
-          postInstall = ''
-            installShellCompletion --cmd muthr \
-              --bash <($out/bin/muthr completion bash) \
-              --zsh <($out/bin/muthr completion zsh)
-          '';
-
-          meta = with pkgs.lib; {
-            description = cargoToml.package.description;
-            homepage = cargoToml.package.repository;
-            license = licenses.mit;
-            platforms = [ "aarch64-darwin" ];
-          };
+        cargoLock = {
+          lockFile = ./Cargo.lock;
         };
-      };
 
-      devShells.${system} = {
-        default = pkgs.mkShell {
-          packages = with pkgs; [
-            cargo
-            rustc
-            rustfmt
-            clippy
-          ] ++ (with pkgs.darwin.apple_sdk.frameworks; [
-            Security
-            SystemConfiguration
-          ]);
+        nativeBuildInputs = [ pkgs.installShellFiles ];
+
+        # Force usage of modern SDK frameworks provided by the system
+        buildInputs = with pkgs.darwin.apple_sdk.frameworks; [
+          Security
+          SystemConfiguration
+          Metal
+          Foundation
+          Accelerate
+        ];
+
+        postInstall = ''
+          installShellCompletion --cmd muthr \
+            --bash <($out/bin/muthr completion bash) \
+            --zsh <($out/bin/muthr completion zsh)
+        '';
+
+        meta = with pkgs.lib; {
+          description = "Zero-trust orchestration for autonomous AI agents";
+          homepage = "https://github.com/tappunk/muthr";
+          license = licenses.mit;
+          platforms = [ "aarch64-darwin" ];
         };
       };
     };
