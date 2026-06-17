@@ -144,9 +144,11 @@ else
     --generate-notes
 fi
 
+# Local asset cleanup MUST happen before cargo publish
+echo "[PROC] Cleaning up local packaging assets..."
+rm -f "$ARCHIVE_NAME" "$CHECKSUM_NAME"
+
 echo "[PROC] Publishing crate package to crates.io..."
 cargo publish
 
-# Local asset cleanup
-rm "$ARCHIVE_NAME" "$CHECKSUM_NAME"
 echo "[ SUCCESS ] Release v$NEW_VERSION fully deployed!"
