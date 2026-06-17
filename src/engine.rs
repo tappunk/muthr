@@ -221,7 +221,10 @@ pub fn stop() -> Result<(), color_eyre::Report> {
     let pid = pid_bytes.trim().parse::<u32>()?;
 
     if !is_llama_server_pid(pid) {
-        println!("[WARN] PID {} is not llama-server (stale PID file). Cleaning up.", pid);
+        println!(
+            "[WARN] PID {} is not llama-server (stale PID file). Cleaning up.",
+            pid
+        );
         fs::remove_file(&pid_file).ok();
         return Ok(());
     }

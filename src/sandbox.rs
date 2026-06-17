@@ -15,22 +15,18 @@ pub fn resolve_workspace_context() -> Result<(String, PathBuf, PathBuf), color_e
     let canonical_current = std::fs::canonicalize(&current_dir)?;
 
     let home = std::env::var("HOME")?;
-    
+
     let raw_workspace_root = std::env::var("OPENCODE_WORKSPACE_ROOT")
         .unwrap_or_else(|_| format!("{}/src/projects", home));
     let canonical_workspace = std::fs::canonicalize(Path::new(&raw_workspace_root))
         .unwrap_or_else(|_| PathBuf::from(&raw_workspace_root));
 
     let dotfiles_path = PathBuf::from(format!("{}/dotfiles", home));
-    let canonical_dotfiles = std::fs::canonicalize(&dotfiles_path)
-        .unwrap_or_else(|_| dotfiles_path.clone());
+    let canonical_dotfiles =
+        std::fs::canonicalize(&dotfiles_path).unwrap_or_else(|_| dotfiles_path.clone());
 
     if canonical_current.starts_with(&canonical_dotfiles) {
-        Ok((
-            "dotfiles-sandbox".to_string(),
-            dotfiles_path, 
-            current_dir,   
-        ))
+        Ok(("dotfiles-sandbox".to_string(), dotfiles_path, current_dir))
     } else if canonical_current.starts_with(&canonical_workspace) {
         if canonical_current == canonical_workspace {
             return Err(color_eyre::eyre::eyre!(
@@ -133,7 +129,10 @@ async fn vm_create(
 
     let content = fs::read_to_string(&template_path).await?;
     let expanded = content
-        .replace("__WORKSPACE_ROOT__", workspace_root.to_str().unwrap_or_default())
+        .replace(
+            "__WORKSPACE_ROOT__",
+            workspace_root.to_str().unwrap_or_default(),
+        )
         .replace("__MOUNT_POINT__", mount_point.to_str().unwrap_or_default());
 
     println!(
