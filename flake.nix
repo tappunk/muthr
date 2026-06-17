@@ -1,5 +1,5 @@
 {
-  description = "Zero-trust orchestration for autonomous AI agents";
+  description = "A zero-trust orchestrator that automates llama.cpp and Lima to safely run local AI agents in isolated VMs.";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
@@ -23,7 +23,7 @@
         nativeBuildInputs = with pkgs; [ installShellFiles ];
 
         meta = with pkgs.lib; {
-          description = "Zero-trust orchestration for autonomous AI agents";
+          description = "A zero-trust orchestrator that automates llama.cpp and Lima to safely run local AI agents in isolated VMs.";
           homepage = "https://github.com/tappunk/muthr";
           license = licenses.mit;
           maintainers = [ ];

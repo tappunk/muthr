@@ -4,9 +4,7 @@
 [![Crates.io Version](https://img.shields.io/crates/v/muthr?color=orange&cacheSeconds=3600)](https://crates.io/crates/muthr)
 [![GitHub Release](https://img.shields.io/github/v/release/tappunk/muthr?color=blue)](https://github.com/tappunk/muthr/releases)
 
-**muthr** runs autonomous AI agents inside isolated VMs on Apple Silicon. Running coding agents on your host exposes SSH keys and system root to unpredictable tool calls.
-
-muthr runs inference on the host and execution inside sandboxes. Agents get full read-write access to the target project and strict read-only access to the host. Inference routes to a local `llama-server`. Sandboxes disable SSH agent forwarding.
+**muthr** is a zero-trust orchestrator that automates **llama.cpp** and **Lima** to safely run local AI agents. Running coding agents on your machine exposes your system to unpredictable tool calls. muthr prevents this by managing the lifecycle of both tools: it controls inference via a host-based llama-server and spawns isolated Lima VMs for agent execution. Agents get full read-write access to your project workspace, but zero access to the host OS or SSH keys.
 
 ## Usage
 
