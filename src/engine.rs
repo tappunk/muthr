@@ -25,15 +25,6 @@ async fn is_llama_server_pid(pid: u32) -> bool {
     }
 }
 
-fn expand_path(path: &str) -> String {
-    if path.starts_with('~') {
-        if let Ok(home) = std::env::var("HOME") {
-            return path.replacen('~', &home, 1);
-        }
-    }
-    path.to_string()
-}
-
 pub async fn serve(
     profile: Option<String>,
     port: u16,
@@ -80,7 +71,7 @@ pub async fn serve(
 
     let tmp_preset = cache_dir.join("active-preset.ini");
     let raw_content = fs::read_to_string(&preset_path).await?;
-    let expanded = raw_content.replace('~', &home);
+    let expanded = raw_content.replace("~", &home);
     fs::write(&tmp_preset, expanded).await?;
 
     let preset = preset::parse_preset(&preset_path)?;
@@ -133,9 +124,9 @@ pub async fn serve(
 
     if let Some(slot) = preset.slots.first() {
         if let Some(model_path) = &slot.model_path {
-            let expanded_model = expand_path(&model_path.to_string_lossy());
+            let expanded_model = preset::expand_home(model_path);
             args.push("--model".to_string());
-            args.push(expanded_model);
+            args.push(expanded_model.to_string_lossy().to_string());
         }
 
         if let Some(ctx) = slot.ctx_size {

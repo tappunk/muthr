@@ -59,10 +59,9 @@ pub fn run(cmd: InitCommands) -> Result<(), color_eyre::Report> {
     println!("[OK] muthr configs installed successfully.");
     println!();
     println!("Next steps:");
-    println!("  muthr profiles list     — view available Lima templates");
-    println!("  muthr deploy dev-sandbox — create a development VM");
-    println!("  muthr serve               — start llama-server");
-    println!("  muthr up                — full workflow (server + VM)");
+    println!("  muthr list  — view available preset profiles");
+    println!("  muthr serve — start llama-server engine context daemon");
+    println!("  muthr up    — full isolated development VM workflow container spin-up");
 
     Ok(())
 }

@@ -164,7 +164,7 @@ class Muthr < Formula
   depends_on "llama.cpp"
   depends_on "fd"
 
-  url "https://github.com/tappunk/muthr/releases/download/v#{NEW_VERSION}/muthr-\#{version}-bin-macos-arm64.tar.gz"
+  url "https://github.com/tappunk/muthr/releases/download/v#{version}/muthr-#{version}-bin-macos-arm64.tar.gz"
   sha256 "${RAW_SHA}"
 
   def install
@@ -200,4 +200,3 @@ echo "[PROC] Publishing crate package to crates.io..."
 cargo publish
 
 echo "[ SUCCESS ] Release v$NEW_VERSION fully deployed!"
-

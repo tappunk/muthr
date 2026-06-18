@@ -54,6 +54,13 @@ fn parse_slot_section(
         None => ("0", section_name.to_string()),
     };
 
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return Err(color_eyre::eyre::eyre!(
+            "Malformed profile slot section: name identifier is empty following parsing logic."
+        ));
+    }
+
     let index = index_str.parse().map_err(|_| {
         color_eyre::eyre::eyre!(
             "Malformed target slot identifier index configuration bounds: {}",
@@ -231,33 +238,16 @@ pub fn resolve_opencode_config(name: &str) -> Option<PathBuf> {
 }
 
 pub fn expand_home(path: &Path) -> PathBuf {
-    let mut expanded = PathBuf::new();
-    let mut components = path.components().peekable();
-
-    let starts_with_home = components
-        .peek()
-        .and_then(|c| {
-            if let std::path::Component::Normal(s) = c {
-                Some(s)
-            } else {
-                None
-            }
-        })
-        .map(|s| s.to_str() == Some("~"))
-        .unwrap_or(false);
-
-    if starts_with_home {
-        components.next();
+    if path.starts_with("~") {
         if let Ok(home) = std::env::var("HOME") {
-            expanded.push(&home);
+            let mut pb = PathBuf::from(home);
+            if let Ok(stripped) = path.strip_prefix("~") {
+                pb.push(stripped);
+            }
+            return pb;
         }
     }
-
-    for comp in components {
-        expanded.push(comp);
-    }
-
-    expanded
+    path.to_path_buf()
 }
 
 pub fn model_name_from_path(path: &Path) -> String {

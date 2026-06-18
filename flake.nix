@@ -43,7 +43,6 @@
 
         shellHook = ''
           echo "muthr dev environment loaded (aarch64-darwin)"
-          echo "Version: 0.1.7"
         '';
       };
 
