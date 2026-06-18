@@ -1,4 +1,3 @@
-use std::os::fd::{FromRawFd, IntoRawFd};
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -53,7 +52,7 @@ pub async fn serve(
             match ui::select_list(&names) {
                 Some(idx) => presets[idx].name.clone(),
                 None => {
-                    eprintln!("[INFO] Cancelled.");
+                    println!("[INFO] Cancelled.");
                     return Ok(());
                 }
             }
@@ -113,7 +112,6 @@ pub async fn serve(
         }
     }
 
-    // Build direct mode arguments
     let mut args: Vec<String> = vec![
         "--host".to_string(),
         bind_host.clone(),
@@ -202,8 +200,6 @@ pub async fn serve(
         args.push(tb.to_string());
     }
 
-    let args_str: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-
     persist_profile(
         &target_profile,
         preset_path.to_str().unwrap(),
@@ -218,7 +214,7 @@ pub async fn serve(
         println!("   Press Ctrl+C to stop the server.\n");
 
         let mut child = AsyncCommand::new("llama-server")
-            .args(&args_str)
+            .args(&args)
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
             .spawn()?;
@@ -245,22 +241,19 @@ pub async fn serve(
             .append(true)
             .open(&log_stderr)?;
 
-        let stdout_fd = stdout_file.into_raw_fd();
-        let stderr_fd = stderr_file.into_raw_fd();
+        let mut cmd = std::process::Command::new("llama-server");
+        cmd.args(&args).stdout(stdout_file).stderr(stderr_file);
 
-        let child = unsafe {
-            std::process::Command::new("llama-server")
-                .args(&args_str)
-                .stdout(Stdio::from_raw_fd(stdout_fd))
-                .stderr(Stdio::from_raw_fd(stderr_fd))
-                .pre_exec(|| {
-                    let _ = libc::setsid();
-                    Ok(())
-                })
-                .spawn()
-        };
+        unsafe {
+            cmd.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
 
-        match child {
+        match cmd.spawn() {
             Ok(c) => {
                 let pid = c.id();
                 fs::write(&pid_file, pid.to_string()).await?;
@@ -431,10 +424,8 @@ pub fn list() -> Result<(), color_eyre::Report> {
 }
 
 fn parse_export_value(line: &str) -> String {
-    if let Some(start) = line.find('"') {
-        if let Some(end) = line[start + 1..].find('"') {
-            return line[start + 1..start + 1 + end].to_string();
-        }
+    if let Some((_, val)) = line.split_once('=') {
+        return val.trim_matches('"').to_string();
     }
     String::new()
 }

@@ -1,3 +1,4 @@
+use serde_json::{Map, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -12,6 +13,7 @@ pub fn generate_runtime_config(
     let template_path = PathBuf::from(&home).join(".config/muthr/opencode-config.json");
 
     let content = fs::read_to_string(&template_path)?;
+    let mut config: Value = serde_json::from_str(&content)?;
 
     let primary_slot = preset
         .slots
@@ -19,16 +21,55 @@ pub fn generate_runtime_config(
         .ok_or_else(|| color_eyre::eyre::eyre!("No slots found in preset"))?;
 
     let model_id = format!("01-{}", primary_slot.name);
-
     let ctx_window = primary_slot.ctx_size.unwrap_or(200000);
 
-    let processed = content
-        .replace("__DEFAULT_MODEL__", &model_id)
-        .replace("__CTX_WINDOW__", &ctx_window.to_string())
-        .replace("__LLAMA_PORT__", &port.to_string())
-        .replace("__INJECTED_MOUNT_POINT__", &mount_point.to_string_lossy());
+    if let Some(obj) = config.as_object_mut() {
+        obj.insert(
+            "model".to_string(),
+            Value::String(format!("llama-cpp/{}", model_id)),
+        );
+        obj.insert(
+            "small_model".to_string(),
+            Value::String(format!("llama-cpp/{}", model_id)),
+        );
 
-    let config: serde_json::Value = serde_json::from_str(&processed)?;
+        if let Some(provider) = obj.get_mut("provider").and_then(|p| p.get_mut("llama-cpp")) {
+            if let Some(p_obj) = provider.as_object_mut() {
+                let mut options = Map::new();
+                options.insert(
+                    "baseURL".to_string(),
+                    Value::String(format!("http://host.lima.internal:{}/v1", port)),
+                );
+                p_obj.insert("options".to_string(), Value::Object(options));
+
+                let mut models_map = Map::new();
+                let mut inner_model = Map::new();
+                inner_model.insert("name".to_string(), Value::String(model_id.clone()));
+                inner_model.insert("tools".to_string(), Value::Bool(true));
+                inner_model.insert(
+                    "context_window".to_string(),
+                    Value::Number(ctx_window.into()),
+                );
+
+                let mut limit_map = Map::new();
+                limit_map.insert("context".to_string(), Value::Number(ctx_window.into()));
+                limit_map.insert("output".to_string(), Value::Number(8192.into()));
+                inner_model.insert("limit".to_string(), Value::Object(limit_map));
+
+                models_map.insert(model_id, Value::Object(inner_model));
+                p_obj.insert("models".to_string(), Value::Object(models_map));
+            }
+        }
+
+        if let Some(mcp) = obj.get_mut("mcp").and_then(|m| m.get_mut("filesystem")) {
+            if let Some(m_obj) = mcp.as_object_mut() {
+                m_obj.insert(
+                    "command".to_string(),
+                    serde_json::json!(["mcp-server-filesystem", mount_point.to_string_lossy()]),
+                );
+            }
+        }
+    }
 
     let runtime_dir = PathBuf::from(&home).join(".cache/muthr/opencode_runtimes");
     fs::create_dir_all(&runtime_dir)?;

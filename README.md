@@ -9,14 +9,17 @@
 ## Usage
 
 ```bash
+muthr init               # Clone configs from tappunk/muthr-configs
+muthr download <source>  # Fetch GGUF model from HuggingFace
+
 muthr serve              # Start llama-server as a background daemon
 muthr serve --foreground # Run in foreground
 muthr status             # Check engine status and active profile
 muthr stop               # Stop the engine
 
-muthr up    # Provision a Debian 13 VM for the current project
-muthr ls    # List all active sandboxes
-muthr down  # Stop the current sandbox
+muthr up                 # Provision a Debian 13 VM for the current project
+muthr ls                 # List all active sandboxes
+muthr down               # Stop the current sandbox
 
 muthr services start     # Launch MCP services VM
 muthr services status
@@ -27,7 +30,7 @@ muthr services stop
 
 1. `llama-server` on macOS, accelerated via Metal
 2. `limactl` VMs provisioned per-project
-3. [OpenCode](https://opencode.ai) inside guest VMs, connecting over `host.lima.internal`
+3. `opencode` inside guest VMs, connecting over `host.lima.internal`
 
 ## Prerequisites
 

@@ -45,24 +45,31 @@ pub struct Preset {
     pub slots: Vec<Slot>,
 }
 
-fn parse_slot_section(section_name: &str, values: &HashMap<String, String>) -> Slot {
-    let parts: Vec<&str> = section_name.splitn(2, '-').collect();
-    let index = parts[0].parse().unwrap_or(0);
-    let name = if parts.len() > 1 {
-        parts[1].to_string()
-    } else {
-        section_name.to_string()
+fn parse_slot_section(
+    section_name: &str,
+    values: &HashMap<String, String>,
+) -> Result<Slot, color_eyre::Report> {
+    let (index_str, name) = match section_name.split_once('-') {
+        Some((idx, name_str)) => (idx, name_str.to_string()),
+        None => ("0", section_name.to_string()),
     };
+
+    let index = index_str.parse().map_err(|_| {
+        color_eyre::eyre::eyre!(
+            "Malformed target slot identifier index configuration bounds: {}",
+            index_str
+        )
+    })?;
 
     let load_on_startup = values
         .get("load-on-startup")
         .map(|v| v.trim() == "true")
         .unwrap_or(false);
 
-    Slot {
+    Ok(Slot {
         index,
         name,
-        model_path: values.get("model").map(|p| PathBuf::from(p.clone())),
+        model_path: values.get("model").map(PathBuf::from),
         ctx_size: values.get("ctx-size").and_then(|v| v.trim().parse().ok()),
         cache_type_k: values.get("cache-type-k").cloned(),
         cache_type_v: values.get("cache-type-v").cloned(),
@@ -83,7 +90,7 @@ fn parse_slot_section(section_name: &str, values: &HashMap<String, String>) -> S
         image_min_tokens: values
             .get("image-min-tokens")
             .and_then(|v| v.trim().parse().ok()),
-    }
+    })
 }
 
 fn parse_global_section(values: &HashMap<String, String>) -> GlobalSettings {
@@ -164,7 +171,7 @@ pub fn parse_preset(path: &Path) -> Result<Preset, color_eyre::Report> {
     let mut slots: Vec<Slot> = Vec::new();
     for (sec_name, sec_vals) in sections {
         if sec_name != "*" {
-            let slot = parse_slot_section(&sec_name, &sec_vals);
+            let slot = parse_slot_section(&sec_name, &sec_vals)?;
             slots.push(slot);
         }
     }

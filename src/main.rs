@@ -18,7 +18,8 @@ use clap_complete::{generate, Shell};
     name = "muthr",
     version,
     author,
-    about,
+    about = "A zero-trust orchestrator that automates secure inference and isolated execution of local AI agents.",
+    long_about = "muthr is a zero-trust orchestrator designed to protect your host OS from unpredictable AI tool calls. It automates llama.cpp on macOS for secure local inference and spawns ephemeral, isolated Lima VMs to execute local AI agents with safe, read-write access to your workspace.\n\nPrerequisites: macOS (Apple Silicon), Lima VM, and llama.cpp",
     arg_required_else_help = true,
     propagate_version = true
 )]
@@ -29,93 +30,93 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    #[command(about = "start the llama-server (background daemon or foreground)")]
+    #[command(about = "Start the llama-server inference engine")]
     Serve {
-        #[arg(long)]
+        #[arg(long, help = "Name of the target preset profile to load")]
         profile: Option<String>,
-        #[arg(short, long, default_value_t = 8080)]
+        #[arg(short, long, default_value_t = 8080, help = "Port to bind the inference engine server")]
         port: u16,
         #[arg(
             long,
-            help = "run in foreground (blocking) instead of background daemon"
+            help = "Run in foreground (blocking mode) instead of as a background daemon"
         )]
         foreground: bool,
     },
 
-    #[command(about = "stop the running llama-server daemon")]
+    #[command(about = "Stop the background llama-server daemon")]
     Stop,
 
-    #[command(about = "show active profile and server status")]
+    #[command(about = "Show the active profile and server status")]
     Status,
 
-    #[command(about = "list available preset profiles")]
+    #[command(about = "List available preset profiles")]
     List,
 
-    #[command(about = "provision and start a lima sandbox vm")]
+    #[command(about = "Provision and start a Lima sandbox VM for the current project")]
     Up {
-        #[arg(short, long, default_value_t = 8080)]
+        #[arg(short, long, default_value_t = 8080, help = "Port where the inference engine is reachable")]
         port: u16,
     },
 
-    #[command(about = "stop the current sandbox vm")]
+    #[command(about = "Stop the active project sandbox VM")]
     Down,
 
-    #[command(about = "list all sandbox vms")]
+    #[command(about = "List all managed sandbox VMs")]
     Ls,
 
-    #[command(about = "manage mcp services vm (start/stop/status/restart)")]
+    #[command(about = "Manage the persistent MCP services VM")]
     Services {
         #[command(subcommand)]
         action: ServicesCommands,
     },
 
-    #[command(about = "download a gguf model from huggingface")]
+    #[command(about = "Download a GGUF model from Hugging Face")]
     Download {
-        #[arg(help = "HuggingFace repo or URL")]
+        #[arg(help = "Hugging Face repository (repo/name) or explicit resolve URL")]
         source: String,
-        #[arg(help = "GGUF filename (required for repo syntax)")]
+        #[arg(help = "Target GGUF filename (required when using repository syntax)")]
         file: Option<String>,
     },
 
-    #[command(about = "run darwin-rebuild and sync neovim configuration")]
+    #[command(about = "Run darwin-rebuild and synchronize Neovim configurations")]
     Rebase {
-        #[arg(long, help = "skip dry-run preview and proceed directly")]
+        #[arg(long, help = "Skip the dry-run configuration switch preview and proceed directly")]
         yes: bool,
     },
 
-    #[command(about = "remove .DS_Store files from the project")]
+    #[command(about = "Remove .DS_Store files from the workspace")]
     Clean,
 
-    #[command(about = "generate shell completion scripts")]
+    #[command(about = "Generate shell completion scripts")]
     Completion {
-        #[arg(value_enum)]
+        #[arg(value_enum, help = "Target shell environment for completion generation")]
         shell: Shell,
     },
 
-    #[command(about = "browse and select ghostty themes")]
+    #[command(about = "Browse and select Ghostty terminal themes")]
     Themes,
 
-    #[command(about = "initialize muthr configs from muthr-configs repository")]
+    #[command(about = "Initialize muthr configurations from the upstream repository")]
     Init {
         #[arg(
             long,
-            help = "custom git URL for muthr-configs (default: tappunk/muthr-configs)"
+            help = "Custom Git URL for muthr-configs repository source override"
         )]
         git_url: Option<String>,
-        #[arg(long, help = "overwrite existing configs")]
+        #[arg(long, help = "Force overwrite existing configurations inside ~/.config/muthr/")]
         force: bool,
     },
 }
 
 #[derive(Subcommand)]
 pub enum ServicesCommands {
-    #[command(about = "start the MCP services VM")]
+    #[command(about = "Start the MCP services VM")]
     Start,
-    #[command(about = "stop the MCP services VM")]
+    #[command(about = "Stop the MCP services VM")]
     Stop,
-    #[command(about = "show MCP services VM status")]
+    #[command(about = "Show the MCP services VM execution status")]
     Status,
-    #[command(about = "restart the MCP services VM")]
+    #[command(about = "Restart the MCP services VM execution context")]
     Restart,
 }
 
