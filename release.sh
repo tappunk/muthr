@@ -145,6 +145,53 @@ else
     --generate-notes
 fi
 
+# --- 8. HOMEBREW TAP UPDATE AUTOMATION ---
+echo "[PROC] Propagating release configuration to Homebrew tap..."
+RAW_SHA=$(awk '{print $1}' "${CHECKSUM_NAME}")
+TAP_DIR="$(mktemp -d)"
+
+git clone --depth 1 "https://github.com/tappunk/homebrew-muthr.git" "$TAP_DIR"
+
+cat <<EOF >"${TAP_DIR}/Formula/muthr.rb"
+class Muthr < Formula
+  desc "Zero-trust orchestrator for secure inference and isolated AI agent execution"
+  homepage "https://github.com/tappunk/muthr"
+  version "${NEW_VERSION}"
+
+  depends_on arch: :arm64
+  depends_on :macos
+  depends_on "lima"
+  depends_on "llama.cpp"
+  depends_on "fd"
+
+  url "https://github.com/tappunk/muthr/releases/download/v#{NEW_VERSION}/muthr-\#{version}-bin-macos-arm64.tar.gz"
+  sha256 "${RAW_SHA}"
+
+  def install
+    bin.install "muthr"
+  end
+
+  def caveats
+    <<~EOS
+      muthr configurations must be initialized before first execution. Run:
+        muthr init
+    EOS
+  end
+
+  test do
+    assert_match version.to_s, shell_output("\#{bin}/muthr --version")
+  end
+end
+EOF
+
+(
+  cd "$TAP_DIR"
+  git add Formula/muthr.rb
+  git commit -m "bump: muthr v${NEW_VERSION}"
+  git push origin main
+)
+rm -rf "$TAP_DIR"
+
 # Local asset cleanup MUST happen before cargo publish
 echo "[PROC] Cleaning up local packaging assets..."
 rm -f "$ARCHIVE_NAME" "$CHECKSUM_NAME"
@@ -153,3 +200,4 @@ echo "[PROC] Publishing crate package to crates.io..."
 cargo publish
 
 echo "[ SUCCESS ] Release v$NEW_VERSION fully deployed!"
+
