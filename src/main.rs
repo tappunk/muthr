@@ -34,7 +34,12 @@ enum Commands {
     Serve {
         #[arg(long, help = "Name of the target preset profile to load")]
         profile: Option<String>,
-        #[arg(short, long, default_value_t = 8080, help = "Port to bind the inference engine server")]
+        #[arg(
+            short,
+            long,
+            default_value_t = 8080,
+            help = "Port to bind the inference engine server"
+        )]
         port: u16,
         #[arg(
             long,
@@ -54,7 +59,12 @@ enum Commands {
 
     #[command(about = "Provision and start a Lima sandbox VM for the current project")]
     Up {
-        #[arg(short, long, default_value_t = 8080, help = "Port where the inference engine is reachable")]
+        #[arg(
+            short,
+            long,
+            default_value_t = 8080,
+            help = "Port where the inference engine is reachable"
+        )]
         port: u16,
     },
 
@@ -80,7 +90,10 @@ enum Commands {
 
     #[command(about = "Run darwin-rebuild and synchronize Neovim configurations")]
     Rebase {
-        #[arg(long, help = "Skip the dry-run configuration switch preview and proceed directly")]
+        #[arg(
+            long,
+            help = "Skip the dry-run configuration switch preview and proceed directly"
+        )]
         yes: bool,
     },
 
@@ -89,7 +102,10 @@ enum Commands {
 
     #[command(about = "Generate shell completion scripts")]
     Completion {
-        #[arg(value_enum, help = "Target shell environment for completion generation")]
+        #[arg(
+            value_enum,
+            help = "Target shell environment for completion generation"
+        )]
         shell: Shell,
     },
 
@@ -103,7 +119,10 @@ enum Commands {
             help = "Custom Git URL for muthr-configs repository source override"
         )]
         git_url: Option<String>,
-        #[arg(long, help = "Force overwrite existing configurations inside ~/.config/muthr/")]
+        #[arg(
+            long,
+            help = "Force overwrite existing configurations inside ~/.config/muthr/"
+        )]
         force: bool,
     },
 }
