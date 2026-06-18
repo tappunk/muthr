@@ -51,8 +51,16 @@ Runtime state (PID files, logs, generated JSON) in `~/.cache/muthr/`.
 
 ## Installation
 
-muthr is available on [crates.io](https://crates.io/crates/muthr). Install with:
+muthr is available on [crates.io](https://crates.io/crates/muthr) and [Homebrew](https://brew.sh/).
+
+### Cargo
 
 ```bash
 cargo install muthr
+```
+
+### Homebrew
+
+```bash
+brew install tappunk/muthr/muthr
 ```
