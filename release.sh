@@ -16,6 +16,20 @@ BUMP="${1:-patch}"
 NOTES="${2:-}"
 
 # --- 1. PRE-FLIGHT VALIDATIONS & QUALITY GATES ---
+echo "[PROC] Verifying deployment dependencies..."
+for tool in cargo gh shasum tar awk git sed; do
+  if ! command -v "$tool" >/dev/null 2>&1; then
+    echo "[ERR] Required CLI tool '$tool' is missing."
+    exit 1
+  fi
+done
+
+# Verify GitHub CLI authentication before proceeding
+if ! gh auth status >/dev/null 2>&1; then
+  echo "[ERR] GitHub CLI is not authenticated. Run 'gh auth login'."
+  exit 1
+fi
+
 if [[ ! "$BUMP" =~ ^(patch|minor|major)$ ]]; then
   echo "[ERR] Invalid bump type '$BUMP'. Use: patch, minor, or major"
   exit 1
@@ -97,9 +111,19 @@ trap rollback ERR
 
 # --- 4. ASSET COMPILATION ---
 echo "[PROC] Updating versioning configuration..."
-# macOS BSD sed requires an empty string '' argument to modify files in-place without backups
-sed -i '' "s/version = \"$CURRENT_VERSION\"/version = \"$NEW_VERSION\"/" Cargo.toml
-sed -i '' "s/version = \"$CURRENT_VERSION\"/version = \"$NEW_VERSION\"/" flake.nix
+# Cross-platform safe version replacement
+if sed --version >/dev/null 2>&1; then
+  # GNU sed (Linux)
+  sed -i "s/^version = \"$CURRENT_VERSION\"/version = \"$NEW_VERSION\"/" Cargo.toml
+  sed -i "s/version = \"$CURRENT_VERSION\"/version = \"$NEW_VERSION\"/" flake.nix
+else
+  # BSD sed (macOS)
+  sed -i '' "s/^version = \"$CURRENT_VERSION\"/version = \"$NEW_VERSION\"/" Cargo.toml
+  sed -i '' "s/version = \"$CURRENT_VERSION\"/version = \"$NEW_VERSION\"/" flake.nix
+fi
+
+# Explicitly update the package lockfile metadata isolated from the build step
+cargo update -p "$BIN_NAME"
 
 echo "[PROC] Compiling optimized release binary for Apple Silicon..."
 cargo build --release --target "$RUST_TARGET"
@@ -179,7 +203,7 @@ class Muthr < Formula
   end
 
   test do
-    assert_match version.to_s, shell_output("\#{bin}/muthr --version")
+    assert_match version.to_s, shell_output("#{bin}/muthr --version")
   end
 end
 EOF
