@@ -107,14 +107,11 @@ fn parse_hf_url(url: &str) -> Result<(String, String), color_eyre::Report> {
         }
     }
 
-    let (repo, filename) = split_res.ok_or_else(|| {
-        color_eyre::eyre::eyre!("Invalid HuggingFace URL architecture structure layout")
-    })?;
+    let (repo, filename) =
+        split_res.ok_or_else(|| color_eyre::eyre::eyre!("Invalid HuggingFace URL"))?;
 
     if filename.is_empty() {
-        return Err(color_eyre::eyre::eyre!(
-            "Missing filename target in routing path resolution"
-        ));
+        return Err(color_eyre::eyre::eyre!("Missing filename in URL"));
     }
 
     Ok((repo, filename))

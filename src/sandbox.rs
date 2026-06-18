@@ -98,10 +98,7 @@ pub async fn vm_is_running(vm_name: &str) -> bool {
 }
 
 pub async fn vm_stop(vm_name: &str) -> Result<(), color_eyre::Report> {
-    println!(
-        "\n[PROC] Sandbox environment exited. Auto-stopping VM ({})...",
-        vm_name
-    );
+    println!("\n[PROC] Stopping sandbox VM ({})...", vm_name);
 
     let output = Command::new("limactl")
         .arg("stop")
@@ -127,7 +124,7 @@ async fn vm_create(
     mount_point: &Path,
 ) -> Result<(), color_eyre::Report> {
     let home = std::env::var("HOME")?;
-    let template_path = PathBuf::from(&home).join(".config/muthr/lima/templates/sandbox.yaml");
+    let template_path = PathBuf::from(&home).join(".config/muthr/dev-sandbox.yaml");
 
     if !template_path.exists() {
         return Err(color_eyre::eyre::eyre!(
@@ -212,7 +209,7 @@ async fn is_vm_provisioned(vm_name: &str) -> bool {
 async fn run_provision(vm_name: &str, script_name: &str) -> Result<(), color_eyre::Report> {
     let home = std::env::var("HOME")?;
     let host_script =
-        PathBuf::from(&home).join(format!(".config/muthr/lima/provision/{}.sh", script_name));
+        PathBuf::from(&home).join(format!(".config/muthr/provision/{}.sh", script_name));
 
     if !host_script.exists() {
         return Err(color_eyre::eyre::eyre!(
@@ -358,12 +355,10 @@ pub async fn up(port: u16) -> Result<(), color_eyre::Report> {
         .await?;
 
     if !cp_status.success() {
-        return Err(color_eyre::eyre::eyre!(
-            "Failed to sync runtime configuration profile into guest instance container."
-        ));
+        return Err(color_eyre::eyre::eyre!("Failed to copy config into VM."));
     }
 
-    println!("[PROC] Attaching shell interaction channels to container layer...");
+    println!("[PROC] Launching opencode session...");
 
     let status = Command::new("limactl")
         .args([

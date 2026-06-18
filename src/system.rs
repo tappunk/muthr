@@ -56,8 +56,8 @@ pub async fn rebase(yes: bool) -> Result<(), color_eyre::Report> {
     clean().await?;
 
     println!();
-    println!("[ OK ] Master Host Update Chain Complete.");
-    println!("   Run muthr services restart to upgrade sandboxed VMs.");
+    println!("[ OK ] Update complete.");
+    println!("   Run 'muthr services restart' to upgrade sandboxed VMs.");
 
     Ok(())
 }

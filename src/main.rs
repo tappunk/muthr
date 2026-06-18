@@ -1,6 +1,7 @@
 pub mod config;
 pub mod download;
 pub mod engine;
+pub mod init;
 pub mod model;
 pub mod preset;
 pub mod sandbox;
@@ -93,6 +94,17 @@ enum Commands {
 
     #[command(about = "browse and select ghostty themes")]
     Themes,
+
+    #[command(about = "initialize muthr configs from muthr-configs repository")]
+    Init {
+        #[arg(
+            long,
+            help = "custom git URL for muthr-configs (default: tappunk/muthr-configs)"
+        )]
+        git_url: Option<String>,
+        #[arg(long, help = "overwrite existing configs")]
+        force: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -133,6 +145,7 @@ async fn run() -> Result<(), color_eyre::Report> {
         Commands::Rebase { yes } => system::rebase(yes).await?,
         Commands::Clean => system::clean().await?,
         Commands::Themes => theme::run()?,
+        Commands::Init { git_url, force } => init::run(init::InitCommands { git_url, force })?,
         Commands::Completion { shell } => {
             let mut cmd = Cli::command();
             generate(shell, &mut cmd, "muthr", &mut std::io::stdout());

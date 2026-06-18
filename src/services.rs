@@ -19,8 +19,7 @@ pub async fn start() -> Result<(), color_eyre::Report> {
 
     let vm_name = "mcp-services-vm";
     let home = std::env::var("HOME")?;
-    let template_path =
-        PathBuf::from(&home).join(".config/muthr/lima/templates/mcp-services-vm.yaml");
+    let template_path = PathBuf::from(&home).join(".config/muthr/mcp-services.yaml");
 
     if !is_vm_running(vm_name) {
         if !is_vm_exists(vm_name) {

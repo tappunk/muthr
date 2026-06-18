@@ -4,7 +4,7 @@ version = "0.1.12"
 edition = "2021"
 rust-version = "1.82"
 authors = ["tappunk"]
-description = "A zero-trust orchestrator that automates llama.cpp and Lima to safely run local AI agents in isolated VMs."
+description = "A zero-trust orchestrator that automates secure inference and isolated execution of local AI agents."
 repository = "https://github.com/tappunk/muthr"
 license = "MIT"
 readme = "README.md"
@@ -32,6 +32,7 @@ ini = "1.3"
 glob = "0.3"
 tempfile = "3.15"
 libc = "0.2"
+dirs = "6.0"
 
 [profile.release]
 lto = true

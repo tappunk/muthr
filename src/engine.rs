@@ -45,7 +45,7 @@ pub async fn serve(
         None => {
             let presets = preset::list_presets()?;
             if presets.is_empty() {
-                eprintln!("[ERR] No presets found in ~/.config/muthr/llama/presets/");
+                eprintln!("[ERR] No presets found in ~/.config/muthr/presets/");
                 return Ok(());
             }
 
@@ -113,7 +113,7 @@ pub async fn serve(
         }
     }
 
-    // === Build direct mode arguments ===
+    // Build direct mode arguments
     let mut args: Vec<String> = vec![
         "--host".to_string(),
         bind_host.clone(),
@@ -379,7 +379,7 @@ pub async fn status() -> Result<(), color_eyre::Report> {
 pub fn list() -> Result<(), color_eyre::Report> {
     let presets = preset::list_presets()?;
     if presets.is_empty() {
-        println!("[WARN] No presets found in ~/.config/muthr/llama/presets/");
+        println!("[WARN] No presets found in ~/.config/muthr/presets/");
         return Ok(());
     }
 
