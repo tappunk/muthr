@@ -1,7 +1,6 @@
 #!/bin/bash
 set -euo pipefail
 
-# Configuration
 BIN_NAME="muthr"
 TARGET_ARCH="macos-arm64"
 RUST_TARGET="aarch64-apple-darwin"
@@ -15,7 +14,6 @@ fi
 BUMP="${1:-patch}"
 NOTES="${2:-}"
 
-# --- 1. PRE-FLIGHT VALIDATIONS & QUALITY GATES ---
 echo "[PROC] Verifying deployment dependencies..."
 for tool in cargo gh shasum tar awk git sed; do
   if ! command -v "$tool" >/dev/null 2>&1; then
@@ -24,7 +22,6 @@ for tool in cargo gh shasum tar awk git sed; do
   fi
 done
 
-# Verify GitHub CLI authentication before proceeding
 if ! gh auth status >/dev/null 2>&1; then
   echo "[ERR] GitHub CLI is not authenticated. Run 'gh auth login'."
   exit 1
@@ -45,14 +42,12 @@ if [[ $(git branch --show-current) != "main" ]]; then
   exit 1
 fi
 
-# Ensure local main is synchronized with remote upstream
 git fetch origin
 if [[ -n $(git log HEAD..origin/main --oneline) ]]; then
   echo "[ERR] Local 'main' is behind 'origin/main'. Pull latest changes first."
   exit 1
 fi
 
-# Enforce strict code quality gates locally before making any changes
 echo "[PROC] Executing strict code quality gates..."
 cargo fmt --check || {
   echo "[ERR] Code formatting violations found. Run 'cargo fmt'."
@@ -67,7 +62,6 @@ cargo test || {
   exit 1
 }
 
-# --- 2. VERSION DETERMINATION ---
 CURRENT_VERSION=$(grep -m 1 '^version = ' Cargo.toml | sed 's/version = "\(.*\)"/\1/')
 if [[ -z "$CURRENT_VERSION" ]]; then
   echo "[ERR] Could not read current version from Cargo.toml"
@@ -95,8 +89,6 @@ if $DRY_RUN; then
   exit 0
 fi
 
-# --- 3. TRANSACTION MANAGEMENT (ROLLBACK PROTECTION) ---
-# If any step fails past this point, revert the workspace to prevent broken states
 INITIAL_COMMIT=$(git rev-parse HEAD)
 rollback() {
   echo ""
@@ -109,49 +101,38 @@ rollback() {
 }
 trap rollback ERR
 
-# --- 4. ASSET COMPILATION ---
 echo "[PROC] Updating versioning configuration..."
-# Cross-platform safe version replacement
 if sed --version >/dev/null 2>&1; then
-  # GNU sed (Linux)
   sed -i "s/^version = \"$CURRENT_VERSION\"/version = \"$NEW_VERSION\"/" Cargo.toml
   sed -i "s/version = \"$CURRENT_VERSION\"/version = \"$NEW_VERSION\"/" flake.nix
 else
-  # BSD sed (macOS)
   sed -i '' "s/^version = \"$CURRENT_VERSION\"/version = \"$NEW_VERSION\"/" Cargo.toml
   sed -i '' "s/version = \"$CURRENT_VERSION\"/version = \"$NEW_VERSION\"/" flake.nix
 fi
 
-# Explicitly update the package lockfile metadata isolated from the build step
 cargo update -p "$BIN_NAME"
 
 echo "[PROC] Compiling optimized release binary for Apple Silicon..."
 cargo build --release --target "$RUST_TARGET"
 
-# --- 5. PACKAGING ---
 echo "[PROC] Packaging distribution archives..."
 ARCHIVE_NAME="${BIN_NAME}-${NEW_VERSION}-bin-${TARGET_ARCH}.tar.gz"
 CHECKSUM_NAME="${ARCHIVE_NAME}.sha256"
 STAGING_DIR="$(mktemp -d)"
 
-# Stage binary alongside core documentation
 mkdir -p "${STAGING_DIR}/${BIN_NAME}"
 cp "target/${RUST_TARGET}/release/${BIN_NAME}" "${STAGING_DIR}/${BIN_NAME}/"
 cp README.md LICENSE "${STAGING_DIR}/${BIN_NAME}/" 2>/dev/null || true
 
-# Compress and generate SHA-256 validation mapping
 tar -czf "$ARCHIVE_NAME" -C "$STAGING_DIR" "${BIN_NAME}"
 shasum -a 256 "$ARCHIVE_NAME" >"$CHECKSUM_NAME"
 rm -rf "$STAGING_DIR"
 
-# --- 6. ATOMIC COMMITS AND TAGGING ---
 echo "[PROC] Recording version changes to Git history..."
 git add Cargo.toml Cargo.lock flake.nix
 git commit -m "chore: release v$NEW_VERSION [skip ci]"
 git tag -a "v$NEW_VERSION" -m "Release v$NEW_VERSION"
 
-# --- 7. DEPLOYMENT (POINT OF NO RETURN) ---
-# Disable the local rollback hook now that we are pushing to remote endpoints
 trap - ERR
 
 echo "[PROC] Synchronizing changes with remote origin..."
@@ -169,7 +150,6 @@ else
     --generate-notes
 fi
 
-# --- 8. HOMEBREW TAP UPDATE AUTOMATION ---
 echo "[PROC] Propagating release configuration to Homebrew tap..."
 RAW_SHA=$(awk '{print $1}' "${CHECKSUM_NAME}")
 TAP_DIR="$(mktemp -d)"
@@ -186,7 +166,6 @@ class Muthr < Formula
   depends_on :macos
   depends_on "lima"
   depends_on "llama.cpp"
-  depends_on "fd"
 
   url "https://github.com/tappunk/muthr/releases/download/v#{version}/muthr-#{version}-bin-macos-arm64.tar.gz"
   sha256 "${RAW_SHA}"
@@ -216,7 +195,6 @@ EOF
 )
 rm -rf "$TAP_DIR"
 
-# Local asset cleanup MUST happen before cargo publish
 echo "[PROC] Cleaning up local packaging assets..."
 rm -f "$ARCHIVE_NAME" "$CHECKSUM_NAME"
 

@@ -224,7 +224,10 @@ pub fn resolve_preset(name: &str) -> Option<PathBuf> {
 
 pub fn resolve_opencode_config(name: &str) -> Option<PathBuf> {
     let home = std::env::var("HOME").ok()?;
-    let path = PathBuf::from(&home).join(format!(".config/opencode/opencode-{}.json", name));
+    let path = PathBuf::from(&home).join(format!(
+        ".cache/muthr/opencode_runtimes/opencode-runtime-{}.json",
+        name
+    ));
     if path.exists() {
         Some(path)
     } else {

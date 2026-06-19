@@ -13,12 +13,6 @@ pub fn generate_runtime_config(
     let template_path = PathBuf::from(&home).join(".config/muthr/opencode-config.json");
 
     let content = fs::read_to_string(&template_path)?;
-    let content = content
-        .replace("__CTX_WINDOW__", "16000")
-        .replace("__DEFAULT_MODEL__", "placeholder-model")
-        .replace("__LLAMA_PORT__", "8080");
-    let mut config: Value = serde_json::from_str(&content)?;
-
     let primary_slot = preset
         .slots
         .first()
@@ -26,6 +20,14 @@ pub fn generate_runtime_config(
 
     let model_id = format!("01-{}", primary_slot.name);
     let ctx_window = primary_slot.ctx_size.unwrap_or(200000);
+
+    let content = content
+        .replace("__CTX_WINDOW__", &ctx_window.to_string())
+        .replace("__DEFAULT_MODEL__", &model_id)
+        .replace("__LLAMA_PORT__", &port.to_string())
+        .replace("__INJECTED_MOUNT_POINT__", &mount_point.to_string_lossy());
+
+    let mut config: Value = serde_json::from_str(&content)?;
 
     if let Some(obj) = config.as_object_mut() {
         obj.insert(
@@ -40,16 +42,10 @@ pub fn generate_runtime_config(
         if let Some(agent) = obj.get_mut("agent").and_then(|a| a.as_object_mut()) {
             for (_name, agent_cfg) in agent.iter_mut() {
                 if let Some(agent_obj) = agent_cfg.as_object_mut() {
-                    if let Some(model_val) = agent_obj.get("model") {
-                        if let Some(s) = model_val.as_str() {
-                            if s.contains("placeholder-model") {
-                                agent_obj.insert(
-                                    "model".to_string(),
-                                    Value::String(format!("llama-cpp/{}", model_id)),
-                                );
-                            }
-                        }
-                    }
+                    agent_obj.insert(
+                        "model".to_string(),
+                        Value::String(format!("llama-cpp/{}", model_id)),
+                    );
                 }
             }
         }
@@ -81,25 +77,12 @@ pub fn generate_runtime_config(
                 p_obj.insert("models".to_string(), Value::Object(models_map));
             }
         }
-
-        if let Some(mcp) = obj.get_mut("mcp").and_then(|m| m.get_mut("filesystem")) {
-            if let Some(m_obj) = mcp.as_object_mut() {
-                m_obj.insert(
-                    "command".to_string(),
-                    serde_json::json!(["mcp-server-filesystem", mount_point.to_string_lossy()]),
-                );
-            }
-        }
     }
 
     let runtime_dir = PathBuf::from(&home).join(".cache/muthr/opencode_runtimes");
     fs::create_dir_all(&runtime_dir)?;
 
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)?
-        .as_secs();
-
-    let runtime_path = runtime_dir.join(format!("opencode-runtime-{}.json", timestamp));
+    let runtime_path = runtime_dir.join(format!("opencode-runtime-{}.json", preset.name));
     fs::write(&runtime_path, serde_json::to_string_pretty(&config)?)?;
 
     Ok(runtime_path)

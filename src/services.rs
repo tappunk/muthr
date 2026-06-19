@@ -82,7 +82,22 @@ pub async fn start() -> Result<(), color_eyre::Report> {
     if is_vm_provisioned(vm_name) {
         println!("[ OK ] MCP VM already provisioned.");
     } else {
-        println!("[PROC] Provisioning MCP services...");
+        println!("[PROC] Transporting provisioning assets to guest environment...");
+        let cp_status = Command::new("limactl")
+            .args([
+                "cp",
+                &format!("{}/.config/muthr/provision/mcp-services.sh", home),
+                &format!("{}:/tmp/mcp-services.sh", vm_name),
+            ])
+            .status()?;
+
+        if !cp_status.success() {
+            return Err(color_eyre::eyre::eyre!(
+                "Failed to copy provision script into services VM context."
+            ));
+        }
+
+        println!("[PROC] Provisioning MCP services inside guest container...");
         let provision_status = Command::new("limactl")
             .args(["shell", vm_name])
             .arg("bash")
@@ -157,7 +172,7 @@ pub async fn status() -> Result<(), color_eyre::Report> {
         })
         .unwrap_or_else(|| "Unknown".to_string());
 
-    println!("   VM:            ● {}", status);
+    println!("   VM:             ● {}", status);
     println!("===============================================================================");
 
     Ok(())
