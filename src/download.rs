@@ -3,6 +3,8 @@ use std::path::PathBuf;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 
+use crate::config;
+
 pub async fn download(source: &str, file: Option<&str>) -> Result<(), color_eyre::Report> {
     let (repo, filename) = match (source, file) {
         (url, None) if url.starts_with("http") && url.contains("huggingface.co") => {
@@ -21,9 +23,14 @@ pub async fn download(source: &str, file: Option<&str>) -> Result<(), color_eyre
         return Ok(());
     }
 
-    let home = std::env::var("HOME")?;
-    let model_dir =
-        std::env::var("LLAMA_MODEL_DIR").unwrap_or_else(|_| format!("{}/opt/models", home));
+    let cfg = config::load()?;
+    let model_dir = cfg.model_dir.unwrap_or_else(|| {
+        if let Ok(home) = std::env::var("HOME") {
+            format!("{}/opt/models", home)
+        } else {
+            "~/opt/models".to_string()
+        }
+    });
 
     let model_subdir = PathBuf::from(&model_dir).join(&repo);
     let target_path = model_subdir.join(&filename);

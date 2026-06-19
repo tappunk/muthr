@@ -1,0 +1,89 @@
+use serde_json::{Map, Value};
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use crate::preset::Preset;
+
+pub fn generate_runtime_config(
+    preset: &Preset,
+    port: u16,
+    mount_point: &Path,
+) -> Result<PathBuf, color_eyre::Report> {
+    let home = std::env::var("HOME")?;
+    let template_path = PathBuf::from(&home).join(".config/muthr/clients/runtime-config.json");
+
+    let content = fs::read_to_string(&template_path)?;
+    let primary_slot = preset
+        .slots
+        .first()
+        .ok_or_else(|| color_eyre::eyre::eyre!("No slots found in preset"))?;
+
+    let model_id = format!("01-{}", primary_slot.name);
+    let ctx_window = primary_slot.ctx_size.unwrap_or(200000);
+
+    let content = content
+        .replace("__CTX_WINDOW__", &ctx_window.to_string())
+        .replace("__DEFAULT_MODEL__", &model_id)
+        .replace("__LLAMA_PORT__", &port.to_string())
+        .replace("__INJECTED_MOUNT_POINT__", &mount_point.to_string_lossy());
+
+    let mut config: Value = serde_json::from_str(&content)?;
+
+    if let Some(obj) = config.as_object_mut() {
+        obj.insert(
+            "model".to_string(),
+            Value::String(format!("llama-cpp/{}", model_id)),
+        );
+        obj.insert(
+            "small_model".to_string(),
+            Value::String(format!("llama-cpp/{}", model_id)),
+        );
+
+        if let Some(agent) = obj.get_mut("agent").and_then(|a| a.as_object_mut()) {
+            for (_name, agent_cfg) in agent.iter_mut() {
+                if let Some(agent_obj) = agent_cfg.as_object_mut() {
+                    agent_obj.insert(
+                        "model".to_string(),
+                        Value::String(format!("llama-cpp/{}", model_id)),
+                    );
+                }
+            }
+        }
+
+        if let Some(provider) = obj.get_mut("provider").and_then(|p| p.get_mut("llama-cpp")) {
+            if let Some(p_obj) = provider.as_object_mut() {
+                let mut options = Map::new();
+                options.insert(
+                    "baseURL".to_string(),
+                    Value::String(format!("http://host.lima.internal:{}/v1", port)),
+                );
+                p_obj.insert("options".to_string(), Value::Object(options));
+
+                let mut models_map = Map::new();
+                let mut inner_model = Map::new();
+                inner_model.insert("name".to_string(), Value::String(model_id.clone()));
+                inner_model.insert("tools".to_string(), Value::Bool(true));
+                inner_model.insert(
+                    "context_window".to_string(),
+                    Value::Number(ctx_window.into()),
+                );
+
+                let mut limit_map = Map::new();
+                limit_map.insert("context".to_string(), Value::Number(ctx_window.into()));
+                limit_map.insert("output".to_string(), Value::Number(8192.into()));
+                inner_model.insert("limit".to_string(), Value::Object(limit_map));
+
+                models_map.insert(model_id, Value::Object(inner_model));
+                p_obj.insert("models".to_string(), Value::Object(models_map));
+            }
+        }
+    }
+
+    let runtime_dir = PathBuf::from(&home).join(".cache/muthr/opencode_runtimes");
+    fs::create_dir_all(&runtime_dir)?;
+
+    let runtime_path = runtime_dir.join(format!("opencode-runtime-{}.json", preset.name));
+    fs::write(&runtime_path, serde_json::to_string_pretty(&config)?)?;
+
+    Ok(runtime_path)
+}

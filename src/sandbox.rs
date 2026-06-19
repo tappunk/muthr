@@ -5,6 +5,7 @@ use tempfile::NamedTempFile;
 use tokio::fs;
 use tokio::process::Command;
 
+use crate::config;
 use crate::engine;
 use crate::model;
 use crate::preset;
@@ -32,8 +33,14 @@ pub fn resolve_workspace_context() -> Result<(String, PathBuf, PathBuf), color_e
     let canonical_current = std::fs::canonicalize(&current_dir)?;
     let home = std::env::var("HOME")?;
 
-    let raw_workspace_root = std::env::var("OPENCODE_WORKSPACE_ROOT")
-        .unwrap_or_else(|_| format!("{}/src", home));
+    let raw_workspace_root = if let Ok(v) = std::env::var("MUTHR_WORKSPACE_ROOT") {
+        v
+    } else if let Ok(cfg) = config::load() {
+        cfg.workspace_root
+            .unwrap_or_else(|| format!("{}/src", home))
+    } else {
+        format!("{}/src", home)
+    };
     let canonical_workspace = std::fs::canonicalize(Path::new(&raw_workspace_root))
         .unwrap_or_else(|_| PathBuf::from(&raw_workspace_root));
 
@@ -365,7 +372,7 @@ pub async fn up(port: u16, profile: ProvisionProfile) -> Result<(), color_eyre::
     .or(presets.first());
 
     let runtime_config = match selected_preset {
-        Some(p) => crate::config::generate_runtime_config(p, port, &mount_point)?,
+        Some(p) => crate::runtime_config::generate_runtime_config(p, port, &mount_point)?,
         None => {
             return Err(color_eyre::eyre::eyre!(
                 "No presets available for config generation"

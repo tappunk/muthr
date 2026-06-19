@@ -4,6 +4,7 @@ pub mod engine;
 pub mod init;
 pub mod model;
 pub mod preset;
+pub mod runtime_config;
 pub mod sandbox;
 pub mod services;
 pub mod theme;
@@ -12,6 +13,7 @@ pub mod ui;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{generate, Shell};
 
+use crate::config::ConfigCommands;
 use crate::sandbox::ProvisionProfile;
 
 #[derive(Parser)]
@@ -38,10 +40,9 @@ enum Commands {
         #[arg(
             short,
             long,
-            default_value_t = 8080,
-            help = "Port to bind the inference engine server"
+            help = "Port to bind the inference engine server (default from muthr.toml or 8080)"
         )]
-        port: u16,
+        port: Option<u16>,
         #[arg(
             long,
             help = "Run in foreground (blocking mode) instead of as a background daemon"
@@ -63,17 +64,15 @@ enum Commands {
         #[arg(
             short,
             long,
-            default_value_t = 8080,
-            help = "Port where the inference engine is reachable"
+            help = "Port where the inference engine is reachable (default from muthr.toml or 8080)"
         )]
-        port: u16,
+        port: Option<u16>,
         #[arg(
             long,
             value_enum,
-            default_value = "base",
-            help = "Provisioning profile to apply (base = minimal, opencode = full toolchain)"
+            help = "Provisioning profile to apply (base = minimal, opencode = full toolchain; default from muthr.toml or base)"
         )]
-        provision_profile: ProvisionProfile,
+        provision_profile: Option<ProvisionProfile>,
     },
 
     #[command(about = "Stop the active project sandbox VM")]
@@ -121,6 +120,12 @@ enum Commands {
         )]
         force: bool,
     },
+
+    #[command(about = "Manage muthr configuration")]
+    Config {
+        #[command(subcommand)]
+        action: ConfigCommands,
+    },
 }
 
 #[derive(Subcommand)]
@@ -149,20 +154,41 @@ async fn run() -> Result<(), color_eyre::Report> {
             profile,
             port,
             foreground,
-        } => engine::serve(profile, port, foreground).await?,
+        } => {
+            let cfg = config::load()?;
+            let server_port = port.unwrap_or(cfg.port.unwrap_or(8080));
+            engine::serve(profile, server_port, foreground).await?
+        }
         Commands::Status => engine::status().await?,
         Commands::Stop => engine::stop().await?,
         Commands::List => engine::list()?,
         Commands::Up {
             port,
             provision_profile,
-        } => sandbox::up(port, provision_profile).await?,
+        } => {
+            let cfg = config::load()?;
+            let up_port = port.unwrap_or(cfg.port.unwrap_or(8080));
+            let up_profile = provision_profile.unwrap_or({
+                match cfg.default_provision_profile.as_deref() {
+                    Some("opencode") => ProvisionProfile::Opencode,
+                    _ => ProvisionProfile::Base,
+                }
+            });
+            sandbox::up(up_port, up_profile).await?
+        }
         Commands::Down => sandbox::down().await?,
         Commands::Ls => sandbox::list().await?,
         Commands::Services { action } => services::run(action).await?,
         Commands::Download { source, file } => download::download(&source, file.as_deref()).await?,
         Commands::Themes => theme::run()?,
         Commands::Init { git_url, force } => init::run(init::InitCommands { git_url, force })?,
+        Commands::Config { action } => match action {
+            ConfigCommands::Init { force } => config::init_config(force)?,
+            ConfigCommands::Show => {
+                let cfg = config::load()?;
+                cfg.print_resolved();
+            }
+        },
         Commands::Completion { shell } => {
             let mut cmd = Cli::command();
             generate(shell, &mut cmd, "muthr", &mut std::io::stdout());

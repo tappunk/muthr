@@ -1,89 +1,118 @@
-use serde_json::{Map, Value};
+use clap::Subcommand;
+use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use crate::preset::Preset;
+#[derive(Subcommand)]
+pub enum ConfigCommands {
+    /// Initialize a starter muthr.toml configuration file
+    Init {
+        #[arg(long, help = "Force overwrite existing muthr.toml")]
+        force: bool,
+    },
+    /// Show the resolved configuration (TOML + env overrides + defaults)
+    Show,
+}
 
-pub fn generate_runtime_config(
-    preset: &Preset,
-    port: u16,
-    mount_point: &Path,
-) -> Result<PathBuf, color_eyre::Report> {
-    let home = std::env::var("HOME")?;
-    let template_path = PathBuf::from(&home).join(".config/muthr/clients/opencode-config.json");
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct MuthrConfig {
+    pub port: Option<u16>,
+    pub workspace_root: Option<String>,
+    pub model_dir: Option<String>,
+    pub default_provision_profile: Option<String>,
+}
 
-    let content = fs::read_to_string(&template_path)?;
-    let primary_slot = preset
-        .slots
-        .first()
-        .ok_or_else(|| color_eyre::eyre::eyre!("No slots found in preset"))?;
-
-    let model_id = format!("01-{}", primary_slot.name);
-    let ctx_window = primary_slot.ctx_size.unwrap_or(200000);
-
-    let content = content
-        .replace("__CTX_WINDOW__", &ctx_window.to_string())
-        .replace("__DEFAULT_MODEL__", &model_id)
-        .replace("__LLAMA_PORT__", &port.to_string())
-        .replace("__INJECTED_MOUNT_POINT__", &mount_point.to_string_lossy());
-
-    let mut config: Value = serde_json::from_str(&content)?;
-
-    if let Some(obj) = config.as_object_mut() {
-        obj.insert(
-            "model".to_string(),
-            Value::String(format!("llama-cpp/{}", model_id)),
-        );
-        obj.insert(
-            "small_model".to_string(),
-            Value::String(format!("llama-cpp/{}", model_id)),
-        );
-
-        if let Some(agent) = obj.get_mut("agent").and_then(|a| a.as_object_mut()) {
-            for (_name, agent_cfg) in agent.iter_mut() {
-                if let Some(agent_obj) = agent_cfg.as_object_mut() {
-                    agent_obj.insert(
-                        "model".to_string(),
-                        Value::String(format!("llama-cpp/{}", model_id)),
-                    );
-                }
-            }
-        }
-
-        if let Some(provider) = obj.get_mut("provider").and_then(|p| p.get_mut("llama-cpp")) {
-            if let Some(p_obj) = provider.as_object_mut() {
-                let mut options = Map::new();
-                options.insert(
-                    "baseURL".to_string(),
-                    Value::String(format!("http://host.lima.internal:{}/v1", port)),
-                );
-                p_obj.insert("options".to_string(), Value::Object(options));
-
-                let mut models_map = Map::new();
-                let mut inner_model = Map::new();
-                inner_model.insert("name".to_string(), Value::String(model_id.clone()));
-                inner_model.insert("tools".to_string(), Value::Bool(true));
-                inner_model.insert(
-                    "context_window".to_string(),
-                    Value::Number(ctx_window.into()),
-                );
-
-                let mut limit_map = Map::new();
-                limit_map.insert("context".to_string(), Value::Number(ctx_window.into()));
-                limit_map.insert("output".to_string(), Value::Number(8192.into()));
-                inner_model.insert("limit".to_string(), Value::Object(limit_map));
-
-                models_map.insert(model_id, Value::Object(inner_model));
-                p_obj.insert("models".to_string(), Value::Object(models_map));
-            }
-        }
+impl MuthrConfig {
+    fn resolve(self) -> (u16, String, String, String) {
+        let port = self.port.unwrap_or(8080);
+        let workspace_root = match self.workspace_root {
+            Some(v) => v,
+            None => std::env::var("HOME")
+                .ok()
+                .map(|h| format!("{}/src", h))
+                .unwrap_or_else(|| "~/src".to_string()),
+        };
+        let model_dir = match self.model_dir {
+            Some(v) => v,
+            None => std::env::var("HOME")
+                .ok()
+                .map(|h| format!("{}/opt/models", h))
+                .unwrap_or_else(|| "~/opt/models".to_string()),
+        };
+        let provision_profile = self
+            .default_provision_profile
+            .unwrap_or_else(|| "base".to_string());
+        (port, workspace_root, model_dir, provision_profile)
     }
 
-    let runtime_dir = PathBuf::from(&home).join(".cache/muthr/opencode_runtimes");
-    fs::create_dir_all(&runtime_dir)?;
+    pub fn print_resolved(&self) {
+        let (port, workspace_root, model_dir, provision_profile) = self.clone().resolve();
+        println!("muthr configuration:");
+        println!("  port:                          {}", port);
+        println!("  workspace_root:                {}", workspace_root);
+        println!("  model_dir:                     {}", model_dir);
+        println!("  default_provision_profile:     {}", provision_profile);
+    }
+}
 
-    let runtime_path = runtime_dir.join(format!("opencode-runtime-{}.json", preset.name));
-    fs::write(&runtime_path, serde_json::to_string_pretty(&config)?)?;
+pub fn load() -> Result<MuthrConfig, color_eyre::Report> {
+    let home = std::env::var("HOME")?;
+    let config_path = PathBuf::from(&home).join(".config/muthr/muthr.toml");
 
-    Ok(runtime_path)
+    let mut config = if config_path.exists() {
+        let content = fs::read_to_string(&config_path)?;
+        toml::from_str(&content)?
+    } else {
+        MuthrConfig::default()
+    };
+
+    if let Ok(v) = std::env::var("MUTHR_PORT") {
+        config.port = v.parse().ok();
+    }
+    if let Ok(v) = std::env::var("MUTHR_WORKSPACE_ROOT") {
+        config.workspace_root = Some(v);
+    }
+    if let Ok(v) = std::env::var("MUTHR_MODEL_DIR") {
+        config.model_dir = Some(v);
+    }
+    if let Ok(v) = std::env::var("MUTHR_PROVISION_PROFILE") {
+        config.default_provision_profile = Some(v);
+    }
+
+    Ok(config)
+}
+
+pub fn init_config(force: bool) -> Result<(), color_eyre::Report> {
+    let home = std::env::var("HOME")?;
+    let config_dir = PathBuf::from(&home).join(".config/muthr");
+    let config_path = config_dir.join("muthr.toml");
+
+    if config_path.exists() && !force {
+        println!("[INFO] muthr.toml already exists at {:?}", config_path);
+        println!("[INFO] Use --force to overwrite.");
+        return Ok(());
+    }
+
+    fs::create_dir_all(&config_dir)?;
+
+    let template = r##"# muthr configuration
+# Generated by 'muthr config init'
+# Override any of these values via environment variables (MUTHR_PORT, MUTHR_WORKSPACE_ROOT, etc.)
+
+# Default port for 'serve' and 'up'
+port = 8080
+
+# Projects directory used by sandbox VMs for path resolution
+workspace_root = "~/src"
+
+# Directory where downloaded GGUF models are stored
+model_dir = "~/opt/models"
+
+# Default provision profile for 'muthr up' (base or opencode)
+default_provision_profile = "base"
+"##;
+
+    fs::write(&config_path, template)?;
+    println!("[OK] muthr.toml created at {:?}", config_path);
+    Ok(())
 }
