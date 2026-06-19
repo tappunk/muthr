@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Crates.io Version](https://img.shields.io/crates/v/muthr?color=orange&cacheSeconds=3600)](https://crates.io/crates/muthr)
 [![GitHub Release](https://img.shields.io/github/v/release/tappunk/muthr?color=blue)](https://github.com/tappunk/muthr/releases)
-[![X (formerly Twitter) Follow](https://img.shields.io/twitter/follow/tappunk?style=social)](https://x.com/tappunk)
+[![X Follow](https://img.shields.io/twitter/follow/tappunk?style=social)](https://x.com/tappunk)
 
 **muthr** is a zero-trust orchestrator that automates **llama.cpp** and **Lima** to run local AI agents. It controls inference via a host-based llama-server and spawns isolated Lima VMs for agent execution. Agents get full read-write access to your project workspace, but zero access to the host OS or SSH keys.
 
@@ -52,16 +52,16 @@ Runtime state (PID files, logs, generated JSON) in `~/.cache/muthr/`.
 
 ## Installation
 
-muthr is available on [crates.io](https://crates.io/crates/muthr) and [Homebrew](https://brew.sh/).
-
-### Cargo
-
-```bash
-cargo install muthr
-```
+muthr is available on [Homebrew](https://brew.sh/) and [crates.io](https://crates.io/crates/muthr).
 
 ### Homebrew
 
 ```bash
 brew install tappunk/muthr/muthr
+```
+
+### Cargo
+
+```bash
+cargo install muthr
 ```
