@@ -42,9 +42,10 @@ muthr services stop
 
 ## Configuration
 
-Config in `~/.config/muthr/`:
+Config in `~/.config/muthr/` (see [muthr-configs](https://github.com/tappunk/muthr-configs) for the full directory structure and examples):
 
-- `llama/presets/*.ini` — context sizes, threading, model paths
+- `provider.d/llama-cpp/*.ini` — preset profiles (context sizes, threading, model paths)
+- `clients/opencode-config.json` — template for OpenCode runtime config generation
 - `lima/templates/*.yaml` — VM architecture, memory, container configs
 - `lima/provision/*.sh` — boot scripts for OpenCode CLI and dependencies
 
@@ -52,16 +53,16 @@ Runtime state (PID files, logs, generated JSON) in `~/.cache/muthr/`.
 
 ## Installation
 
-muthr is available on [Homebrew](https://brew.sh/) and [crates.io](https://crates.io/crates/muthr).
-
-### Homebrew
-
-```bash
-brew install tappunk/muthr/muthr
-```
+muthr is available on [crates.io](https://crates.io/crates/muthr) and [Homebrew](https://brew.sh/).
 
 ### Cargo
 
 ```bash
 cargo install muthr
+```
+
+### Homebrew
+
+```bash
+brew install tappunk/muthr/muthr
 ```

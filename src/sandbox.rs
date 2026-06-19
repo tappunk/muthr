@@ -132,7 +132,7 @@ async fn vm_create(
     mount_point: &Path,
 ) -> Result<(), color_eyre::Report> {
     let home = std::env::var("HOME")?;
-    let template_path = PathBuf::from(&home).join(".config/muthr/dev-sandbox.yaml");
+    let template_path = PathBuf::from(&home).join(".config/muthr/manifests/dev-sandbox.yaml");
 
     if !template_path.exists() {
         return Err(color_eyre::eyre::eyre!(
@@ -253,7 +253,7 @@ async fn wait_for_dpkg(vm_name: &str, timeout_secs: u64) -> Result<(), color_eyr
 async fn run_provision(vm_name: &str, script_name: &str) -> Result<(), color_eyre::Report> {
     let home = std::env::var("HOME")?;
     let host_script =
-        PathBuf::from(&home).join(format!(".config/muthr/provision/{}.sh", script_name));
+        PathBuf::from(&home).join(format!(".config/muthr/provision.d/{}.sh", script_name));
 
     if !host_script.exists() {
         return Err(color_eyre::eyre::eyre!(

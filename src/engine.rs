@@ -35,7 +35,7 @@ pub async fn serve(
         None => {
             let presets = preset::list_presets()?;
             if presets.is_empty() {
-                eprintln!("[ERR] No presets found in ~/.config/muthr/presets/");
+                eprintln!("[ERR] No providers found in ~/.config/muthr/provider.d/");
                 return Ok(());
             }
 
@@ -350,7 +350,7 @@ pub async fn status() -> Result<(), color_eyre::Report> {
 pub fn list() -> Result<(), color_eyre::Report> {
     let presets = preset::list_presets()?;
     if presets.is_empty() {
-        println!("[WARN] No presets found in ~/.config/muthr/presets/");
+        println!("[WARN] No providers found in ~/.config/muthr/provider.d/");
         return Ok(());
     }
 

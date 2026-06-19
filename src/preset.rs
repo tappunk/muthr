@@ -182,7 +182,7 @@ pub fn parse_preset(path: &Path) -> Result<Preset, color_eyre::Report> {
 
 pub fn list_presets() -> Result<Vec<Preset>, color_eyre::Report> {
     let home = std::env::var("HOME")?;
-    let presets_dir = PathBuf::from(&home).join(".config/muthr/presets");
+    let presets_dir = PathBuf::from(&home).join(".config/muthr/provider.d/llama-cpp");
 
     if !presets_dir.exists() {
         return Ok(Vec::new());
@@ -206,7 +206,8 @@ pub fn list_presets() -> Result<Vec<Preset>, color_eyre::Report> {
 
 pub fn resolve_preset(name: &str) -> Option<PathBuf> {
     let home = std::env::var("HOME").ok()?;
-    let path = PathBuf::from(&home).join(format!(".config/muthr/presets/{}.ini", name));
+    let path =
+        PathBuf::from(&home).join(format!(".config/muthr/provider.d/llama-cpp/{}.ini", name));
     if path.exists() {
         Some(path)
     } else {

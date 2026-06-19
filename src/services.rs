@@ -19,7 +19,7 @@ pub async fn start() -> Result<(), color_eyre::Report> {
 
     let vm_name = "mcp-services-vm";
     let home = std::env::var("HOME")?;
-    let template_path = PathBuf::from(&home).join(".config/muthr/mcp-services.yaml");
+    let template_path = PathBuf::from(&home).join(".config/muthr/manifests/mcp-services.yaml");
 
     if !is_vm_running(vm_name) {
         if !is_vm_exists(vm_name) {
@@ -86,7 +86,7 @@ pub async fn start() -> Result<(), color_eyre::Report> {
         let cp_status = Command::new("limactl")
             .args([
                 "cp",
-                &format!("{}/.config/muthr/provision/mcp-services.sh", home),
+                &format!("{}/.config/muthr/provision.d/mcp-services.sh", home),
                 &format!("{}:/tmp/mcp-services.sh", vm_name),
             ])
             .status()?;
