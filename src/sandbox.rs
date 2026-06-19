@@ -346,13 +346,10 @@ pub async fn up(port: u16) -> Result<(), color_eyre::Report> {
     let ctx_window = model::get_ctx_window("127.0.0.1", port).await?;
     println!("[INFO] Context window: {}", ctx_window);
 
-    let mut preset_name = String::new();
-    let active_path = PathBuf::from(&home).join(".cache/muthr/active-preset.ini");
-    if active_path.exists() {
-        if let Ok(preset) = preset::parse_preset(&active_path) {
-            preset_name = preset.name;
-        }
-    }
+    let preset_name =
+        fs::read_to_string(PathBuf::from(&home).join(".cache/muthr/active-preset-name"))
+            .await
+            .unwrap_or_default();
 
     let selected_preset = if !preset_name.is_empty() {
         presets.iter().find(|p| p.name == preset_name)
