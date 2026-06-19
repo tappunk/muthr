@@ -56,17 +56,12 @@ fn parse_slot_section(
 
     let name = name.trim().to_string();
     if name.is_empty() {
-        return Err(color_eyre::eyre::eyre!(
-            "Malformed profile slot section: name identifier is empty following parsing logic."
-        ));
+        return Err(color_eyre::eyre::eyre!("Slot section has no name"));
     }
 
-    let index = index_str.parse().map_err(|_| {
-        color_eyre::eyre::eyre!(
-            "Malformed target slot identifier index configuration bounds: {}",
-            index_str
-        )
-    })?;
+    let index = index_str
+        .parse()
+        .map_err(|_| color_eyre::eyre::eyre!("Invalid slot index: {}", index_str))?;
 
     let load_on_startup = values
         .get("load-on-startup")

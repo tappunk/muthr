@@ -6,7 +6,6 @@ pub mod model;
 pub mod preset;
 pub mod sandbox;
 pub mod services;
-pub mod system;
 pub mod theme;
 pub mod ui;
 
@@ -18,8 +17,8 @@ use clap_complete::{generate, Shell};
     name = "muthr",
     version,
     author,
-    about = "A zero-trust orchestrator that automates secure inference and isolated execution of local AI agents.",
-    long_about = "muthr is a zero-trust orchestrator designed to protect your host OS from unpredictable AI tool calls. It automates llama.cpp on macOS for secure local inference and spawns ephemeral, isolated Lima VMs to execute local AI agents with safe, read-write access to your workspace.\n\nPrerequisites: macOS (Apple Silicon), Lima VM, and llama.cpp",
+    about = "Manage llama.cpp inference and Lima sandbox VMs for local AI development.",
+    long_about = "muthr automates llama.cpp on macOS for local inference and manages isolated Lima sandbox VMs for running AI agents with safe access to your workspace.\n\nPrerequisites: macOS (Apple Silicon), Lima VM, and llama.cpp",
     arg_required_else_help = true,
     propagate_version = true
 )]
@@ -88,9 +87,6 @@ enum Commands {
         file: Option<String>,
     },
 
-    #[command(about = "Remove .DS_Store files from the workspace")]
-    Clean,
-
     #[command(about = "Generate shell completion scripts")]
     Completion {
         #[arg(
@@ -153,7 +149,6 @@ async fn run() -> Result<(), color_eyre::Report> {
         Commands::Ls => sandbox::list().await?,
         Commands::Services { action } => services::run(action).await?,
         Commands::Download { source, file } => download::download(&source, file.as_deref()).await?,
-        Commands::Clean => system::clean().await?,
         Commands::Themes => theme::run()?,
         Commands::Init { git_url, force } => init::run(init::InitCommands { git_url, force })?,
         Commands::Completion { shell } => {
