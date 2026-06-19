@@ -245,9 +245,8 @@ async fn dpkg_lock_free(vm_name: &str) -> bool {
         .arg("-c")
         .arg(
             "pgrep -x apt-get > /dev/null 2>&1 || \
-             pgrep -x dpkg > /dev/null 2>&1 || \
-             fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; \
-             exit $?",
+             pgrep -x dpkg > /dev/null 2>&1; \
+             exit $?"
         )
         .output()
         .await
@@ -384,7 +383,9 @@ pub async fn up(port: u16, profile: ProvisionProfile) -> Result<(), color_eyre::
     let cp_status = Command::new("limactl")
         .args([
             "cp",
-            runtime_config.to_str().unwrap(),
+            runtime_config
+                .to_str()
+                .ok_or_else(|| color_eyre::eyre::eyre!("Non-UTF-8 path in runtime config"))?,
             &format!("{}:/tmp/opencode-config.json", vm_name),
         ])
         .status()

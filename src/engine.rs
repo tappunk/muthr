@@ -19,7 +19,7 @@ async fn is_llama_server_pid(pid: u32) -> bool {
         .await;
     if let Ok(out) = output {
         let comm = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        comm.contains("llama-server")
+        comm == "llama-server"
     } else {
         false
     }
@@ -53,7 +53,7 @@ pub async fn serve(
     let preset_path = preset::resolve_preset(&target_profile)
         .ok_or_else(|| color_eyre::eyre::eyre!("Preset not found: {}", target_profile))?;
 
-    apply_vram_limits().await;
+    apply_vram_limits(foreground).await;
 
     let home = std::env::var("HOME")?;
     let cache_dir = PathBuf::from(&home).join(".cache/muthr");
@@ -389,19 +389,30 @@ pub fn list() -> Result<(), color_eyre::Report> {
     Ok(())
 }
 
-async fn apply_vram_limits() {
+async fn apply_vram_limits(foreground: bool) {
     let mem_bytes = sysctl_memsize().await;
     let threshold: u64 = 32 * 1024 * 1024 * 1024;
 
     if mem_bytes >= threshold {
         let gb = mem_bytes / 1024 / 1024 / 1024;
+        let wired_mb = (mem_bytes / 1024 / 1024) * 85 / 100;
+        let wired_mb = if wired_mb > 24576 { 24576 } else { wired_mb };
+
+        if !foreground {
+            println!(
+                "[INFO] High-memory host detected ({}GB). Wired Metal VRAM: {}MB (background mode — apply with --foreground to set now)",
+                gb, wired_mb
+            );
+            return;
+        }
+
         println!(
             "[INFO] High-memory host detected ({}GB). Adjusting wired Metal VRAM limits...",
             gb
         );
         println!("[PROC] Adjusting Metal VRAM limits (requires sudo access)...");
         let _ = AsyncCommand::new("sudo")
-            .args(["sysctl", "-w", "iogpu.wired_limit_mb=43000"])
+            .args(["sysctl", "-w", &format!("iogpu.wired_limit_mb={}", wired_mb)])
             .output()
             .await;
     }
