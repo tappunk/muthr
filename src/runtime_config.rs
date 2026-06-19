@@ -10,7 +10,7 @@ pub fn generate_runtime_config(
     mount_point: &Path,
 ) -> Result<PathBuf, color_eyre::Report> {
     let home = std::env::var("HOME")?;
-    let template_path = PathBuf::from(&home).join(".config/muthr/clients/runtime-config.json");
+    let template_path = PathBuf::from(&home).join(".config/muthr/clients/opencode-config.json");
 
     let content = fs::read_to_string(&template_path)?;
     let primary_slot = preset

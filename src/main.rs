@@ -168,12 +168,31 @@ async fn run() -> Result<(), color_eyre::Report> {
         } => {
             let cfg = config::load()?;
             let up_port = port.unwrap_or(cfg.port.unwrap_or(8080));
-            let up_profile = provision_profile.unwrap_or({
-                match cfg.default_provision_profile.as_deref() {
-                    Some("opencode") => ProvisionProfile::Opencode,
-                    _ => ProvisionProfile::Base,
+            let up_profile = match (provision_profile, cfg.default_provision_profile.as_deref()) {
+                (Some(p), _) => p,
+                (None, Some("opencode")) => ProvisionProfile::Opencode,
+                (None, None) => {
+                    let options = vec![
+                        crate::ui::ProvisionOption {
+                            label: "base",
+                            description: "Minimal VM provision — no extra tools installed",
+                        },
+                        crate::ui::ProvisionOption {
+                            label: "opencode",
+                            description: "Full toolchain with opencode binary and MCP support",
+                        },
+                    ];
+                    match ui::select_provision_profile(&options) {
+                        Some(0) => ProvisionProfile::Base,
+                        Some(1) => ProvisionProfile::Opencode,
+                        _ => {
+                            println!("[INFO] Cancelled.");
+                            return Ok(());
+                        }
+                    }
                 }
-            });
+                _ => ProvisionProfile::Base,
+            };
             sandbox::up(up_port, up_profile).await?
         }
         Commands::Down => sandbox::down().await?,

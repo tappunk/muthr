@@ -46,8 +46,8 @@ Config in `~/.config/muthr/` (see [muthr-configs](https://github.com/tappunk/mut
 
 - `provider.d/llama-cpp/*.ini` — preset profiles (context sizes, threading, model paths)
 - `clients/opencode-config.json` — template for OpenCode runtime config generation
-- `lima/templates/*.yaml` — VM architecture, memory, container configs
-- `lima/provision/*.sh` — boot scripts for OpenCode CLI and dependencies
+- `manifests/*.yaml` — VM architecture, memory, container configs
+- `provision.d/*.sh` — boot scripts for OpenCode CLI and dependencies
 
 Runtime state (PID files, logs, generated JSON) in `~/.cache/muthr/`.
 

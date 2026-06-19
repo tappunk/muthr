@@ -4,6 +4,7 @@ use ratatui::style::{Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{HighlightSpacing, List, ListItem, ListState, Row, Table, TableState};
 use ratatui::Frame;
+use std::io::{self, IsTerminal, Write};
 use std::panic::{self, AssertUnwindSafe};
 
 pub struct TerminalGuard;
@@ -17,6 +18,10 @@ impl Drop for TerminalGuard {
 pub fn select_list(items: &[&str]) -> Option<usize> {
     if items.is_empty() {
         return None;
+    }
+
+    if !io::stdout().is_terminal() {
+        return select_list_text(items);
     }
 
     let _guard = TerminalGuard;
@@ -48,6 +53,31 @@ pub fn select_list(items: &[&str]) -> Option<usize> {
     match result {
         Ok(Ok(opt)) => opt,
         _ => None,
+    }
+}
+
+fn select_list_text(items: &[&str]) -> Option<usize> {
+    let stdout = io::stdout();
+    let mut handle = stdout.lock();
+
+    writeln!(handle, "Select from the following:").ok();
+    for (i, item) in items.iter().enumerate() {
+        writeln!(handle, "  {}) {}", i + 1, item).ok();
+    }
+    write!(handle, "Enter choice (1-{}) or q to quit: ", items.len()).ok();
+    handle.flush().ok();
+
+    let mut input = String::new();
+    io::stdin().read_line(&mut input).ok();
+
+    let trimmed = input.trim();
+    if trimmed == "q" || trimmed.is_empty() {
+        return None;
+    }
+
+    match trimmed.parse::<usize>() {
+        Ok(n) if n > 0 && n <= items.len() => Some(n - 1),
+        _ => select_list_text(items),
     }
 }
 
@@ -84,6 +114,10 @@ pub fn select_table(headers: &[&str], rows: Vec<Vec<String>>) -> Option<usize> {
         return None;
     }
 
+    if !io::stdout().is_terminal() {
+        return select_table_text(headers, rows);
+    }
+
     let _guard = TerminalGuard;
     let result = panic::catch_unwind(AssertUnwindSafe(|| {
         ratatui::run::<_, Result<_, color_eyre::Report>>(|terminal| {
@@ -111,6 +145,36 @@ pub fn select_table(headers: &[&str], rows: Vec<Vec<String>>) -> Option<usize> {
     match result {
         Ok(Ok(opt)) => opt,
         _ => None,
+    }
+}
+
+fn select_table_text(headers: &[&str], rows: Vec<Vec<String>>) -> Option<usize> {
+    let stdout = io::stdout();
+    let mut handle = stdout.lock();
+
+    let header_line: String = headers.iter().map(|h| format!("{:<20}", h)).collect();
+    writeln!(handle, "{}", header_line).ok();
+    writeln!(handle, "{}", "-".repeat(header_line.len())).ok();
+
+    for (i, row) in rows.iter().enumerate() {
+        let line: String = row.iter().map(|c| format!("{:<20}", c)).collect();
+        writeln!(handle, "  {}) {}", i + 1, line).ok();
+    }
+
+    write!(handle, "Enter choice (1-{}) or q to quit: ", rows.len()).ok();
+    handle.flush().ok();
+
+    let mut input = String::new();
+    io::stdin().read_line(&mut input).ok();
+
+    let trimmed = input.trim();
+    if trimmed == "q" || trimmed.is_empty() {
+        return None;
+    }
+
+    match trimmed.parse::<usize>() {
+        Ok(n) if n > 0 && n <= rows.len() => Some(n - 1),
+        _ => select_table_text(headers, rows),
     }
 }
 
@@ -146,4 +210,107 @@ fn render_table(frame: &mut Frame, headers: &[&str], rows: &[Vec<String>], state
 
     let footer = Line::from("Press Enter to select, q/Esc to cancel");
     frame.render_widget(footer.centered(), footer_area);
+}
+
+pub struct ProvisionOption<'a> {
+    pub label: &'a str,
+    pub description: &'a str,
+}
+
+pub fn select_provision_profile(items: &[ProvisionOption]) -> Option<usize> {
+    if items.is_empty() {
+        return None;
+    }
+
+    if !io::stdout().is_terminal() {
+        return select_provision_profile_text(items);
+    }
+
+    let _guard = TerminalGuard;
+    let result = panic::catch_unwind(AssertUnwindSafe(|| {
+        ratatui::run::<_, Result<_, color_eyre::Report>>(|terminal| {
+            let mut state = ListState::default().with_selected(Some(0));
+            loop {
+                terminal.draw(|frame| render_provision_list(frame, items, &mut state))?;
+
+                if let Some(key) = event::read()?.as_key_press_event() {
+                    match key.code {
+                        KeyCode::Char('j') | KeyCode::Down => state.select_next(),
+                        KeyCode::Char('k') | KeyCode::Up => state.select_previous(),
+                        KeyCode::Enter | KeyCode::Char('y') | KeyCode::Char('Y') => {
+                            if let Some(idx) = state.selected() {
+                                return Ok(Some(idx));
+                            }
+                        }
+                        KeyCode::Char('q') | KeyCode::Esc => return Ok(None),
+                        _ => {}
+                    }
+                }
+            }
+        })
+    }));
+
+    match result {
+        Ok(Ok(opt)) => opt,
+        _ => None,
+    }
+}
+
+fn select_provision_profile_text(items: &[ProvisionOption]) -> Option<usize> {
+    let stdout = io::stdout();
+    let mut handle = stdout.lock();
+
+    writeln!(handle, "Select provision profile:").ok();
+    for (i, item) in items.iter().enumerate() {
+        writeln!(handle, "  {}) {} — {}", i + 1, item.label, item.description).ok();
+    }
+    write!(handle, "Enter choice (1-{}) or q to quit: ", items.len()).ok();
+    handle.flush().ok();
+
+    let mut input = String::new();
+    io::stdin().read_line(&mut input).ok();
+
+    let trimmed = input.trim();
+    if trimmed == "q" || trimmed.is_empty() {
+        return None;
+    }
+
+    match trimmed.parse::<usize>() {
+        Ok(n) if n > 0 && n <= items.len() => Some(n - 1),
+        _ => select_provision_profile_text(items),
+    }
+}
+
+fn render_provision_list(frame: &mut Frame, items: &[ProvisionOption], state: &mut ListState) {
+    let constraints = [
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Fill(1),
+        Constraint::Length(2),
+    ];
+    let layout = Layout::vertical(constraints).spacing(1);
+    let areas: [Rect; 4] = layout.areas(frame.area());
+    let [header_area, desc_area, list_area, footer_area] = areas;
+
+    let title = Line::from("Select Provision Profile").bold();
+    frame.render_widget(title.centered(), header_area);
+
+    if let Some(idx) = state.selected() {
+        let desc = Line::from(items[idx].description).style(Style::default().dim());
+        frame.render_widget(desc, desc_area);
+    }
+
+    let list_items: Vec<ListItem> = items
+        .iter()
+        .map(|item| ListItem::new(item.label.to_string()))
+        .collect();
+    let list = List::new(list_items)
+        .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
+        .highlight_symbol("> ")
+        .highlight_spacing(HighlightSpacing::Always);
+
+    frame.render_stateful_widget(list, list_area, state);
+
+    let footer = Line::from("Enter to select, q/Esc to cancel").centered();
+    frame.render_widget(footer, footer_area);
 }
