@@ -102,7 +102,8 @@ rollback() {
 trap rollback ERR
 
 echo "[PROC] Updating versioning configuration..."
-sed -i '' "s/version = \"$CURRENT_VERSION\"/version = \"$NEW_VERSION\"/" Cargo.toml flake.nix
+sed -i.bak "s/version = \"$CURRENT_VERSION\"/version = \"$NEW_VERSION\"/" Cargo.toml flake.nix
+rm Cargo.toml.bak flake.nix.bak
 
 cargo update -p "$BIN_NAME"
 

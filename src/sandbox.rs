@@ -244,8 +244,9 @@ async fn dpkg_lock_free(vm_name: &str) -> bool {
         .arg("bash")
         .arg("-c")
         .arg(
-            "pgrep -x apt-get > /dev/null 2>&1 || \
-             pgrep -x dpkg > /dev/null 2>&1; \
+            "fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || \
+             pgrep -x apt-get >/dev/null 2>&1 || \
+             pgrep -x dpkg >/dev/null 2>&1; \
              exit $?",
         )
         .output()

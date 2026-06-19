@@ -99,9 +99,7 @@ pub async fn start() -> Result<(), color_eyre::Report> {
 
         println!("[PROC] Provisioning MCP services inside guest container...");
         let provision_status = Command::new("limactl")
-            .args(["shell", vm_name])
-            .arg("bash")
-            .arg("/tmp/mcp-services.sh")
+            .args(["shell", vm_name, "bash", "/tmp/mcp-services.sh", vm_name])
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
             .status()?;

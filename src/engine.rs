@@ -19,7 +19,7 @@ async fn is_llama_server_pid(pid: u32) -> bool {
         .await;
     if let Ok(out) = output {
         let comm = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        comm == "llama-server"
+        comm.ends_with("llama-server")
     } else {
         false
     }
