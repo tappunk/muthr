@@ -399,6 +399,7 @@ async fn apply_vram_limits() {
             "[INFO] High-memory host detected ({}GB). Adjusting wired Metal VRAM limits...",
             gb
         );
+        println!("[PROC] Adjusting Metal VRAM limits (requires sudo access)...");
         let _ = AsyncCommand::new("sudo")
             .args(["sysctl", "-w", "iogpu.wired_limit_mb=43000"])
             .output()

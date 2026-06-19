@@ -12,6 +12,8 @@ pub mod ui;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{generate, Shell};
 
+use crate::sandbox::ProvisionProfile;
+
 #[derive(Parser)]
 #[command(
     name = "muthr",
@@ -65,6 +67,13 @@ enum Commands {
             help = "Port where the inference engine is reachable"
         )]
         port: u16,
+        #[arg(
+            long,
+            value_enum,
+            default_value = "base",
+            help = "Provisioning profile to apply (base = minimal, opencode = full toolchain)"
+        )]
+        provision_profile: ProvisionProfile,
     },
 
     #[command(about = "Stop the active project sandbox VM")]
@@ -144,7 +153,10 @@ async fn run() -> Result<(), color_eyre::Report> {
         Commands::Status => engine::status().await?,
         Commands::Stop => engine::stop().await?,
         Commands::List => engine::list()?,
-        Commands::Up { port } => sandbox::up(port).await?,
+        Commands::Up {
+            port,
+            provision_profile,
+        } => sandbox::up(port, provision_profile).await?,
         Commands::Down => sandbox::down().await?,
         Commands::Ls => sandbox::list().await?,
         Commands::Services { action } => services::run(action).await?,

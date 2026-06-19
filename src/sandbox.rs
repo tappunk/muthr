@@ -10,6 +10,23 @@ use crate::model;
 use crate::preset;
 use crate::ui;
 
+use clap::ValueEnum;
+
+#[derive(Debug, Clone, PartialEq, ValueEnum)]
+pub enum ProvisionProfile {
+    Base,
+    Opencode,
+}
+
+impl std::fmt::Display for ProvisionProfile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ProvisionProfile::Base => write!(f, "base"),
+            ProvisionProfile::Opencode => write!(f, "opencode"),
+        }
+    }
+}
+
 pub fn resolve_workspace_context() -> Result<(String, PathBuf, PathBuf), color_eyre::Report> {
     let current_dir = std::env::current_dir()?;
     let canonical_current = std::fs::canonicalize(&current_dir)?;
@@ -286,37 +303,37 @@ async fn run_provision(vm_name: &str, script_name: &str) -> Result<(), color_eyr
     Ok(())
 }
 
-async fn handle_provisioning(vm_name: &str) -> Result<(), color_eyre::Report> {
+async fn handle_provisioning(
+    vm_name: &str,
+    profile: Option<&ProvisionProfile>,
+) -> Result<(), color_eyre::Report> {
     if is_vm_provisioned(vm_name).await {
         return Ok(());
     }
 
-    let options = vec![
-        "Base only -- shell access, no extra installs",
-        "Base + opencode -- MCP servers + opencode-ai CLI",
-    ];
-
-    let is_tty = std::io::stdout().is_terminal();
-    let idx = if is_tty {
-        match ui::select_list(&options) {
-            Some(i) => i,
-            None => {
-                println!("[INFO] Skipping provision. Base VM only.");
-                return Ok(());
+    match profile {
+        Some(ProvisionProfile::Opencode) => {
+            run_provision(vm_name, "opencode").await?;
+        }
+        Some(ProvisionProfile::Base) => {
+            println!("[INFO] Base provision only — no extra installs.");
+        }
+        None => {
+            let options = vec![
+                "Base only -- shell access, no extra installs",
+                "Base + opencode -- MCP servers + opencode-ai CLI",
+            ];
+            match ui::select_list(&options) {
+                Some(1) => run_provision(vm_name, "opencode").await?,
+                Some(0) => println!("[INFO] Base provision only — no extra installs."),
+                Some(_) | None => println!("[INFO] Skipping provision. Base VM only."),
             }
         }
-    } else {
-        println!("[INFO] No TTY detected. Defaulting to: {}", options[1]);
-        1
-    };
-
-    if idx == 1 {
-        run_provision(vm_name, "opencode").await?;
     }
     Ok(())
 }
 
-pub async fn up(port: u16) -> Result<(), color_eyre::Report> {
+pub async fn up(port: u16, profile: ProvisionProfile) -> Result<(), color_eyre::Report> {
     let (vm_name, mount_point, workdir) = resolve_workspace_context()?;
     println!("[INFO] Target Virtual Environment Context: {}", vm_name);
 
@@ -338,7 +355,7 @@ pub async fn up(port: u16) -> Result<(), color_eyre::Report> {
         println!("[ OK ] VM already running");
     }
 
-    handle_provisioning(&vm_name).await?;
+    handle_provisioning(&vm_name, Some(&profile)).await?;
 
     let loaded_model = model::poll_loaded_model("127.0.0.1", port, 20, 1.5).await?;
     println!("[INFO] Model detected: {}", loaded_model);

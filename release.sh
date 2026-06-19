@@ -102,13 +102,7 @@ rollback() {
 trap rollback ERR
 
 echo "[PROC] Updating versioning configuration..."
-if sed --version >/dev/null 2>&1; then
-  sed -i "s/^version = \"$CURRENT_VERSION\"/version = \"$NEW_VERSION\"/" Cargo.toml
-  sed -i "s/version = \"$CURRENT_VERSION\"/version = \"$NEW_VERSION\"/" flake.nix
-else
-  sed -i '' "s/^version = \"$CURRENT_VERSION\"/version = \"$NEW_VERSION\"/" Cargo.toml
-  sed -i '' "s/version = \"$CURRENT_VERSION\"/version = \"$NEW_VERSION\"/" flake.nix
-fi
+sed -i '' "s/version = \"$CURRENT_VERSION\"/version = \"$NEW_VERSION\"/" Cargo.toml flake.nix
 
 cargo update -p "$BIN_NAME"
 
