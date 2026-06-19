@@ -346,39 +346,39 @@ pub async fn up(port: u16) -> Result<(), color_eyre::Report> {
     let ctx_window = model::get_ctx_window("127.0.0.1", port).await?;
     println!("[INFO] Context window: {}", ctx_window);
 
-    let runtime_config = {
-        let active_profile_path = PathBuf::from(&home).join(".cache/muthr/opencode-profile");
-        let preset_to_use = if active_profile_path.exists() {
-            let content = fs::read_to_string(&active_profile_path).await?;
-            let mut preset_name = String::new();
-            for line in content.lines() {
-                if line.starts_with("export LLAMA_ARG_MODELS_PRESET=") {
-                    if let Some(start) = line.find('"') {
-                        if let Some(end) = line[start + 1..].find('"') {
-                            preset_name = line[start + 1..start + 1 + end].to_string();
+    let mut preset_name = String::new();
+    let active_profile_path = PathBuf::from(&home).join(".cache/muthr/opencode-profile");
+    if active_profile_path.exists() {
+        let content = fs::read_to_string(&active_profile_path).await?;
+        for line in content.lines() {
+            if line.starts_with("export LLAMA_ARG_MODELS_PRESET=") {
+                if let Some(start) = line.find('"') {
+                    if let Some(end) = line[start + 1..].find('"') {
+                        let full_path = line[start + 1..start + 1 + end].to_string();
+                        if let Some(stem) =
+                            Path::new(&full_path).file_stem().and_then(|s| s.to_str())
+                        {
+                            preset_name = stem.to_string();
                         }
                     }
                 }
             }
-            if !preset_name.is_empty() {
-                presets
-                    .iter()
-                    .find(|p| p.path.to_string_lossy() == preset_name)
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        }
+    }
 
-        let selected_preset = preset_to_use.or(presets.first());
-        match selected_preset {
-            Some(p) => crate::config::generate_runtime_config(p, port, &mount_point)?,
-            None => {
-                return Err(color_eyre::eyre::eyre!(
-                    "No presets available for config generation"
-                ))
-            }
+    let selected_preset = if !preset_name.is_empty() {
+        presets.iter().find(|p| p.name == preset_name)
+    } else {
+        None
+    }
+    .or(presets.first());
+
+    let runtime_config = match selected_preset {
+        Some(p) => crate::config::generate_runtime_config(p, port, &mount_point)?,
+        None => {
+            return Err(color_eyre::eyre::eyre!(
+                "No presets available for config generation"
+            ))
         }
     };
 

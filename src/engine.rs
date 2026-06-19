@@ -58,7 +58,7 @@ pub async fn serve(
         println!("[ OK ] Config found: {:?}", path);
     } else {
         eprintln!(
-            "[WARN] No matching opencode config at ~/.config/opencode/opencode-{}.json",
+            "[WARN] No matching opencode config found in runtime cache for profile: {}",
             target_profile
         );
     }
