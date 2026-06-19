@@ -33,7 +33,7 @@ pub fn resolve_workspace_context() -> Result<(String, PathBuf, PathBuf), color_e
     let home = std::env::var("HOME")?;
 
     let raw_workspace_root = std::env::var("OPENCODE_WORKSPACE_ROOT")
-        .unwrap_or_else(|_| format!("{}/src/projects", home));
+        .unwrap_or_else(|_| format!("{}/src", home));
     let canonical_workspace = std::fs::canonicalize(Path::new(&raw_workspace_root))
         .unwrap_or_else(|_| PathBuf::from(&raw_workspace_root));
 
