@@ -147,34 +147,3 @@ fn render_table(frame: &mut Frame, headers: &[&str], rows: &[Vec<String>], state
     let footer = Line::from("Press Enter to select, q/Esc to cancel");
     frame.render_widget(footer.centered(), footer_area);
 }
-
-pub fn confirm(prompt: &str) -> bool {
-    let _guard = TerminalGuard;
-    let result = panic::catch_unwind(AssertUnwindSafe(|| {
-        ratatui::run::<_, Result<bool, color_eyre::Report>>(|terminal| loop {
-            terminal.draw(|frame| render_confirm(frame, prompt))?;
-
-            if let Some(key) = event::read()?.as_key_press_event() {
-                match key.code {
-                    KeyCode::Char('y') | KeyCode::Char('Y') => return Ok(true),
-                    KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => return Ok(false),
-                    _ => {}
-                }
-            }
-        })
-    }));
-
-    match result {
-        Ok(Ok(val)) => val,
-        _ => false,
-    }
-}
-
-fn render_confirm(frame: &mut Frame, prompt: &str) {
-    let area = frame.area();
-    let y = area.height / 2;
-
-    let text = format!("{} [y/n]", prompt);
-    let line = Line::from(text).bold().centered();
-    frame.render_widget(line, Rect::new(0, y, area.width, 1));
-}

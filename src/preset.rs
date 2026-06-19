@@ -17,11 +17,9 @@ pub struct Slot {
     pub min_p: Option<f32>,
     pub top_k: Option<u32>,
     pub repeat_penalty: Option<f32>,
-    pub repeat_last_n: Option<u32>,
     pub load_on_startup: bool,
     pub jinja: Option<bool>,
     pub parallel: Option<u32>,
-    pub image_min_tokens: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -83,15 +81,9 @@ fn parse_slot_section(
         repeat_penalty: values
             .get("repeat-penalty")
             .and_then(|v| v.trim().parse().ok()),
-        repeat_last_n: values
-            .get("repeat-last-n")
-            .and_then(|v| v.trim().parse().ok()),
         load_on_startup,
         jinja: values.get("jinja").map(|v| v.trim() == "true"),
         parallel: values.get("parallel").and_then(|v| v.trim().parse().ok()),
-        image_min_tokens: values
-            .get("image-min-tokens")
-            .and_then(|v| v.trim().parse().ok()),
     })
 }
 
@@ -233,18 +225,4 @@ pub fn expand_home(path: &Path) -> PathBuf {
         }
     }
     path.to_path_buf()
-}
-
-pub fn model_name_from_path(path: &Path) -> String {
-    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-
-    let suffixes = [
-        "-q4_k_m", "-Q4_K_M", "-q4-k-m", "-q5_k_m", "-Q5_K_M", "-q5-k-m", "-q8_0", "-Q8_0",
-        "-q8-0", "-q3_k_s", "-Q3_K_S", "-q2_k", "-Q2_K",
-    ];
-
-    suffixes
-        .iter()
-        .fold(stem, |s, suffix| s.strip_suffix(suffix).unwrap_or(s))
-        .to_string()
 }

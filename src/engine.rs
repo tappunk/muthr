@@ -63,6 +63,7 @@ pub async fn serve(
     let raw_content = fs::read_to_string(&preset_path).await?;
     let expanded = raw_content.replace("~", &home);
     fs::write(&tmp_preset, expanded).await?;
+    fs::write(cache_dir.join("active-preset-name"), &target_profile).await?;
 
     let preset = preset::parse_preset(&preset_path)?;
     let bind_host = preset
@@ -298,23 +299,21 @@ pub async fn stop() -> Result<(), color_eyre::Report> {
 pub async fn status() -> Result<(), color_eyre::Report> {
     let home = std::env::var("HOME")?;
     let active_path = PathBuf::from(&home).join(".cache/muthr/active-preset.ini");
+    let name_path = PathBuf::from(&home).join(".cache/muthr/active-preset-name");
 
     if !active_path.exists() {
         println!("[STATUS] No active profile configured.");
         return Ok(());
     }
 
-    let preset_path = preset::resolve_preset(
-        &PathBuf::from(&home)
-            .join(".cache/muthr/active-preset.ini")
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .map(String::from)
-            .unwrap_or_default(),
-    );
+    let preset_name = fs::read_to_string(&name_path)
+        .await
+        .ok()
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
 
-    let preset = if let Some(p) = preset_path {
-        preset::parse_preset(&p).ok()
+    let preset = if !preset_name.is_empty() {
+        preset::resolve_preset(&preset_name).and_then(|p| preset::parse_preset(&p).ok())
     } else {
         None
     };
