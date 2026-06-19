@@ -1,12 +1,58 @@
+use std::path::PathBuf;
 use std::process::Stdio;
 use tokio::process::Command;
 
+fn resolve_flake_dir() -> Result<PathBuf, color_eyre::Report> {
+    let home = dirs::home_dir()
+        .ok_or_else(|| color_eyre::eyre::eyre!("Could not determine home directory"))?;
+
+    if let Ok(cwd) = std::env::current_dir() {
+        let mut ancestor = cwd.clone();
+        while ancestor.components().count() > 1 {
+            if ancestor.join("nix").exists() || ancestor.join("flake.nix").exists() {
+                return Ok(ancestor);
+            }
+            ancestor.pop();
+        }
+    }
+
+    let standard_paths = [
+        home.join(".config/dotfiles"),
+        home.join("src/projects/dotfiles"),
+        home.join(".config/muthr"),
+    ];
+
+    for path in &standard_paths {
+        if path.exists() {
+            return Ok(path.clone());
+        }
+    }
+
+    Err(color_eyre::eyre::eyre!(
+        "Could not automatically locate your active Nix flake directory. Run this command from within your configuration repository."
+    ))
+}
+
 pub async fn rebase(yes: bool) -> Result<(), color_eyre::Report> {
     println!("[PROC] Starting Master Host Update Chain...");
-    let flake_target = format!("{}/dotfiles/nix", std::env::var("HOME")?);
+
+    let flake_root = resolve_flake_dir()?;
+    let flake_target = flake_root.join("nix");
+
+    if !flake_target.exists() && !flake_root.join("flake.nix").exists() {
+        return Err(color_eyre::eyre::eyre!(
+            "Could not locate Nix configuration flake files at target path: {:?}",
+            flake_root
+        ));
+    }
+
+    let flake_argument = format!("{}#system", flake_target.to_string_lossy());
 
     if !yes {
-        println!("[WARN] Previewing changes (--dry-run):");
+        println!(
+            "[WARN] Previewing changes (--dry-run) using target: {}...",
+            flake_argument
+        );
         println!();
 
         let output = Command::new("sudo")
@@ -14,7 +60,7 @@ pub async fn rebase(yes: bool) -> Result<(), color_eyre::Report> {
                 "darwin-rebuild",
                 "switch",
                 "--flake",
-                &format!("{}#system", flake_target),
+                &flake_argument,
                 "--dry-run",
             ])
             .stdin(Stdio::inherit())
@@ -34,12 +80,7 @@ pub async fn rebase(yes: bool) -> Result<(), color_eyre::Report> {
     }
 
     Command::new("sudo")
-        .args([
-            "darwin-rebuild",
-            "switch",
-            "--flake",
-            &format!("{}#system", flake_target),
-        ])
+        .args(["darwin-rebuild", "switch", "--flake", &flake_argument])
         .stdin(Stdio::inherit())
         .status()
         .await?;
@@ -70,19 +111,30 @@ pub async fn clean() -> Result<(), color_eyre::Report> {
         return Ok(());
     }
 
-    let home = std::env::var("HOME")?;
-    let dirs = [
-        format!("{}/src", home),
-        format!("{}/opt", home),
-        format!("{}/.config", home),
-        format!("{}/dotfiles", home),
+    let home = dirs::home_dir()
+        .ok_or_else(|| color_eyre::eyre::eyre!("Could not determine home directory"))?;
+
+    let mut paths_to_clean = vec![
+        home.join("src"),
+        home.join("opt"),
+        home.join(".config/muthr"),
     ];
+
+    if let Ok(flake_dir) = resolve_flake_dir() {
+        if !paths_to_clean.contains(&flake_dir) {
+            paths_to_clean.push(flake_dir);
+        }
+    }
 
     let args = vec!["-H", "-I", "^[.]DS_Store$"];
 
-    for dir in &dirs {
+    for dir in &paths_to_clean {
+        if !dir.exists() {
+            continue;
+        }
+
         let mut child_args = args.clone();
-        child_args.push(dir);
+        child_args.push(dir.to_str().unwrap());
         child_args.push("-t");
         child_args.push("f");
         child_args.push("-X");

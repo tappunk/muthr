@@ -13,7 +13,6 @@ use crate::ui;
 pub fn resolve_workspace_context() -> Result<(String, PathBuf, PathBuf), color_eyre::Report> {
     let current_dir = std::env::current_dir()?;
     let canonical_current = std::fs::canonicalize(&current_dir)?;
-
     let home = std::env::var("HOME")?;
 
     let raw_workspace_root = std::env::var("OPENCODE_WORKSPACE_ROOT")
@@ -21,13 +20,23 @@ pub fn resolve_workspace_context() -> Result<(String, PathBuf, PathBuf), color_e
     let canonical_workspace = std::fs::canonicalize(Path::new(&raw_workspace_root))
         .unwrap_or_else(|_| PathBuf::from(&raw_workspace_root));
 
-    let dotfiles_path = PathBuf::from(format!("{}/dotfiles", home));
-    let canonical_dotfiles =
-        std::fs::canonicalize(&dotfiles_path).unwrap_or_else(|_| dotfiles_path.clone());
+    let mut inside_muthr_config = false;
+    if let Ok(muthr_config_dir) = std::fs::canonicalize(PathBuf::from(&home).join(".config/muthr"))
+    {
+        if canonical_current.starts_with(&muthr_config_dir) {
+            inside_muthr_config = true;
+        }
+    }
 
-    if canonical_current.starts_with(&canonical_dotfiles) {
-        Ok(("dotfiles-sandbox".to_string(), dotfiles_path, current_dir))
-    } else if canonical_current.starts_with(&canonical_workspace) {
+    if inside_muthr_config {
+        return Ok((
+            "muthr-config-sandbox".to_string(),
+            PathBuf::from(&home).join(".config/muthr"),
+            current_dir,
+        ));
+    }
+
+    if canonical_current.starts_with(&canonical_workspace) {
         if canonical_current == canonical_workspace {
             return Err(color_eyre::eyre::eyre!(
                 "Navigate into a project directory first."
@@ -57,7 +66,7 @@ pub fn resolve_workspace_context() -> Result<(String, PathBuf, PathBuf), color_e
         Ok((vm_name, mount_point, current_dir))
     } else {
         Err(color_eyre::eyre::eyre!(
-            "Sandbox tasks are restricted to workspace roots or dotfile directories."
+            "Sandbox tasks are restricted to project workspaces or the muthr configuration directory."
         ))
     }
 }
@@ -99,7 +108,6 @@ pub async fn vm_is_running(vm_name: &str) -> bool {
 
 pub async fn vm_stop(vm_name: &str) -> Result<(), color_eyre::Report> {
     println!("\n[PROC] Stopping sandbox VM ({})...", vm_name);
-
     let output = Command::new("limactl")
         .arg("stop")
         .arg(vm_name)
@@ -206,6 +214,42 @@ async fn is_vm_provisioned(vm_name: &str) -> bool {
     }
 }
 
+async fn dpkg_lock_free(vm_name: &str) -> bool {
+    let output = Command::new("limactl")
+        .args(["shell", "--workdir", "/tmp", vm_name])
+        .arg("bash")
+        .arg("-c")
+        .arg(
+            "pgrep -x apt-get > /dev/null 2>&1 || \
+             pgrep -x dpkg > /dev/null 2>&1 || \
+             fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; \
+             exit $?",
+        )
+        .output()
+        .await
+        .ok();
+
+    match output {
+        Some(out) => !out.status.success(),
+        None => true,
+    }
+}
+
+async fn wait_for_dpkg(vm_name: &str, timeout_secs: u64) -> Result<(), color_eyre::Report> {
+    let start = std::time::Instant::now();
+    loop {
+        if dpkg_lock_free(vm_name).await {
+            return Ok(());
+        }
+        if start.elapsed() > std::time::Duration::from_secs(timeout_secs) {
+            return Err(color_eyre::eyre::eyre!(
+                "Timed out waiting for dpkg/apt lock to be released"
+            ));
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    }
+}
+
 async fn run_provision(vm_name: &str, script_name: &str) -> Result<(), color_eyre::Report> {
     let home = std::env::var("HOME")?;
     let host_script =
@@ -219,10 +263,12 @@ async fn run_provision(vm_name: &str, script_name: &str) -> Result<(), color_eyr
     }
 
     println!("[PROC] Running provision: {}...", script_name);
-
     let script_str = host_script
         .to_str()
         .ok_or_else(|| color_eyre::eyre::eyre!("Invalid UTF-8 in provision script path"))?;
+
+    println!("[PROC] Waiting for dpkg/apt lock to be free...");
+    wait_for_dpkg(vm_name, 120).await?;
 
     let status = Command::new("bash")
         .arg(script_str)
@@ -251,7 +297,6 @@ async fn handle_provisioning(vm_name: &str) -> Result<(), color_eyre::Report> {
     ];
 
     let is_tty = std::io::stdout().is_terminal();
-
     let idx = if is_tty {
         match ui::select_list(&options) {
             Some(i) => i,
@@ -273,7 +318,6 @@ async fn handle_provisioning(vm_name: &str) -> Result<(), color_eyre::Report> {
 
 pub async fn up(port: u16) -> Result<(), color_eyre::Report> {
     let (vm_name, mount_point, workdir) = resolve_workspace_context()?;
-
     println!("[INFO] Target Virtual Environment Context: {}", vm_name);
 
     if !engine::verify_health(port).await {
@@ -286,14 +330,8 @@ pub async fn up(port: u16) -> Result<(), color_eyre::Report> {
     let home = std::env::var("HOME")?;
     let presets = preset::list_presets()?;
 
-    let workspace_root = if vm_name == "dotfiles-sandbox" {
-        PathBuf::from(&home).join("dotfiles")
-    } else {
-        PathBuf::from(&home).join("src/projects")
-    };
-
     if !vm_exists(&vm_name).await {
-        vm_create(&vm_name, &workspace_root, &mount_point).await?;
+        vm_create(&vm_name, &mount_point, &mount_point).await?;
     } else if !vm_is_running(&vm_name).await {
         vm_start(&vm_name).await?;
     } else {
@@ -359,7 +397,6 @@ pub async fn up(port: u16) -> Result<(), color_eyre::Report> {
     }
 
     println!("[PROC] Launching opencode session...");
-
     let status = Command::new("limactl")
         .args([
             "shell",
@@ -388,19 +425,16 @@ pub async fn up(port: u16) -> Result<(), color_eyre::Report> {
 
 pub async fn down() -> Result<(), color_eyre::Report> {
     let (vm_name, _, _) = resolve_workspace_context()?;
-
     if !vm_exists(&vm_name).await {
         println!("[WARN] VM '{}' does not exist", vm_name);
         return Ok(());
     }
-
     vm_stop(&vm_name).await?;
     Ok(())
 }
 
 pub async fn list() -> Result<(), color_eyre::Report> {
     let sandbox_suffix = "-sandbox";
-
     println!("[INFO] Sandbox VMs:");
     println!("===============================================================================");
 
@@ -425,7 +459,6 @@ pub async fn list() -> Result<(), color_eyre::Report> {
     }
 
     let is_tty = std::io::stdout().is_terminal();
-
     if !is_tty {
         for vm in &vms {
             let status = Command::new("limactl")
@@ -449,7 +482,6 @@ pub async fn list() -> Result<(), color_eyre::Report> {
             } else {
                 &format!("/sandbox-{}", project)
             };
-
             println!("  {:<30} {}  Mount: {}", vm, status, mount_point);
         }
     } else {
@@ -476,7 +508,6 @@ pub async fn list() -> Result<(), color_eyre::Report> {
             } else {
                 &format!("/sandbox-{}", project)
             };
-
             rows.push(vec![vm.clone(), status, mount_point.to_string()]);
         }
 

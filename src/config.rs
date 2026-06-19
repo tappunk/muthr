@@ -13,6 +13,10 @@ pub fn generate_runtime_config(
     let template_path = PathBuf::from(&home).join(".config/muthr/opencode-config.json");
 
     let content = fs::read_to_string(&template_path)?;
+    let content = content
+        .replace("__CTX_WINDOW__", "16000")
+        .replace("__DEFAULT_MODEL__", "placeholder-model")
+        .replace("__LLAMA_PORT__", "8080");
     let mut config: Value = serde_json::from_str(&content)?;
 
     let primary_slot = preset
@@ -32,6 +36,23 @@ pub fn generate_runtime_config(
             "small_model".to_string(),
             Value::String(format!("llama-cpp/{}", model_id)),
         );
+
+        if let Some(agent) = obj.get_mut("agent").and_then(|a| a.as_object_mut()) {
+            for (_name, agent_cfg) in agent.iter_mut() {
+                if let Some(agent_obj) = agent_cfg.as_object_mut() {
+                    if let Some(model_val) = agent_obj.get("model") {
+                        if let Some(s) = model_val.as_str() {
+                            if s.contains("placeholder-model") {
+                                agent_obj.insert(
+                                    "model".to_string(),
+                                    Value::String(format!("llama-cpp/{}", model_id)),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         if let Some(provider) = obj.get_mut("provider").and_then(|p| p.get_mut("llama-cpp")) {
             if let Some(p_obj) = provider.as_object_mut() {

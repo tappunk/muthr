@@ -53,22 +53,18 @@ pub async fn query_models(
 fn extract_field(json: &serde_json::Value, field: &str) -> String {
     if let Some(data) = json.get("data").and_then(|d| d.as_array()) {
         for item in data {
-            if let (Some(id), Some(status)) = (item.get("id"), item.get("status")) {
-                if let Some(value) = status.get("value").and_then(|v| v.as_str()) {
-                    if value == "loaded" {
-                        if field.contains(".id") {
-                            return id.as_str().unwrap_or("").to_string();
-                        } else if field.contains(".meta.n_ctx") {
-                            if let Some(n_ctx) = item
-                                .get("meta")
-                                .and_then(|m| m.get("n_ctx"))
-                                .and_then(|v| v.as_u64())
-                            {
-                                return n_ctx.to_string();
-                            }
-                            return "16000".to_string();
-                        }
+            if let Some(id) = item.get("id") {
+                if field.contains(".id") {
+                    return id.as_str().unwrap_or("").to_string();
+                } else if field.contains(".meta.n_ctx") {
+                    if let Some(n_ctx) = item
+                        .get("meta")
+                        .and_then(|m| m.get("n_ctx"))
+                        .and_then(|v| v.as_u64())
+                    {
+                        return n_ctx.to_string();
                     }
+                    return "16000".to_string();
                 }
             }
         }
@@ -87,12 +83,8 @@ pub async fn get_loaded_model(host: &str, port: u16) -> Result<String, color_eyr
 
     if let Some(data) = json.get("data").and_then(|d| d.as_array()) {
         for item in data {
-            if let (Some(id), Some(status)) = (item.get("id"), item.get("status")) {
-                if let Some(value) = status.get("value").and_then(|v| v.as_str()) {
-                    if value == "loaded" {
-                        return Ok(id.as_str().unwrap_or("").to_string());
-                    }
-                }
+            if let Some(id) = item.get("id") {
+                return Ok(id.as_str().unwrap_or("").to_string());
             }
         }
     }
@@ -111,18 +103,12 @@ pub async fn get_ctx_window(host: &str, port: u16) -> Result<u32, color_eyre::Re
 
     if let Some(data) = json.get("data").and_then(|d| d.as_array()) {
         for item in data {
-            if let (Some(_id), Some(status)) = (item.get("id"), item.get("status")) {
-                if let Some(value) = status.get("value").and_then(|v| v.as_str()) {
-                    if value == "loaded" {
-                        if let Some(n_ctx) = item
-                            .get("meta")
-                            .and_then(|m| m.get("n_ctx"))
-                            .and_then(|v| v.as_u64())
-                        {
-                            return Ok(n_ctx as u32);
-                        }
-                    }
-                }
+            if let Some(n_ctx) = item
+                .get("meta")
+                .and_then(|m| m.get("n_ctx"))
+                .and_then(|v| v.as_u64())
+            {
+                return Ok(n_ctx as u32);
             }
         }
     }
@@ -147,12 +133,8 @@ pub async fn poll_loaded_model(
             if let Ok(json) = response.json::<serde_json::Value>().await {
                 if let Some(data) = json.get("data").and_then(|d| d.as_array()) {
                     for item in data {
-                        if let (Some(id), Some(status)) = (item.get("id"), item.get("status")) {
-                            if let Some(value) = status.get("value").and_then(|v| v.as_str()) {
-                                if value == "loaded" {
-                                    return Ok(id.as_str().unwrap_or("").to_string());
-                                }
-                            }
+                        if let Some(id) = item.get("id") {
+                            return Ok(id.as_str().unwrap_or("").to_string());
                         }
                     }
                 }
