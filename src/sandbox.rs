@@ -305,29 +305,18 @@ async fn run_provision(vm_name: &str, script_name: &str) -> Result<(), color_eyr
 
 async fn handle_provisioning(
     vm_name: &str,
-    profile: Option<&ProvisionProfile>,
+    profile: &ProvisionProfile,
 ) -> Result<(), color_eyre::Report> {
     if is_vm_provisioned(vm_name).await {
         return Ok(());
     }
 
     match profile {
-        Some(ProvisionProfile::Opencode) => {
+        ProvisionProfile::Opencode => {
             run_provision(vm_name, "opencode").await?;
         }
-        Some(ProvisionProfile::Base) => {
+        ProvisionProfile::Base => {
             println!("[INFO] Base provision only — no extra installs.");
-        }
-        None => {
-            let options = vec![
-                "Base only -- shell access, no extra installs",
-                "Base + opencode -- MCP servers + opencode-ai CLI",
-            ];
-            match ui::select_list(&options) {
-                Some(1) => run_provision(vm_name, "opencode").await?,
-                Some(0) => println!("[INFO] Base provision only — no extra installs."),
-                Some(_) | None => println!("[INFO] Skipping provision. Base VM only."),
-            }
         }
     }
     Ok(())
@@ -355,7 +344,7 @@ pub async fn up(port: u16, profile: ProvisionProfile) -> Result<(), color_eyre::
         println!("[ OK ] VM already running");
     }
 
-    handle_provisioning(&vm_name, Some(&profile)).await?;
+    handle_provisioning(&vm_name, &profile).await?;
 
     let loaded_model = model::poll_loaded_model("127.0.0.1", port, 20, 1.5).await?;
     println!("[INFO] Model detected: {}", loaded_model);
