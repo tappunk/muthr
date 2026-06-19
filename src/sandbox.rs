@@ -347,22 +347,10 @@ pub async fn up(port: u16) -> Result<(), color_eyre::Report> {
     println!("[INFO] Context window: {}", ctx_window);
 
     let mut preset_name = String::new();
-    let active_profile_path = PathBuf::from(&home).join(".cache/muthr/opencode-profile");
-    if active_profile_path.exists() {
-        let content = fs::read_to_string(&active_profile_path).await?;
-        for line in content.lines() {
-            if line.starts_with("export LLAMA_ARG_MODELS_PRESET=") {
-                if let Some(start) = line.find('"') {
-                    if let Some(end) = line[start + 1..].find('"') {
-                        let full_path = line[start + 1..start + 1 + end].to_string();
-                        if let Some(stem) =
-                            Path::new(&full_path).file_stem().and_then(|s| s.to_str())
-                        {
-                            preset_name = stem.to_string();
-                        }
-                    }
-                }
-            }
+    let active_path = PathBuf::from(&home).join(".cache/muthr/active-preset.ini");
+    if active_path.exists() {
+        if let Ok(preset) = preset::parse_preset(&active_path) {
+            preset_name = preset.name;
         }
     }
 

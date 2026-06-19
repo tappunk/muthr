@@ -53,16 +53,6 @@ pub async fn serve(
     let preset_path = preset::resolve_preset(&target_profile)
         .ok_or_else(|| color_eyre::eyre::eyre!("Preset not found: {}", target_profile))?;
 
-    let opencode_config_path = preset::resolve_opencode_config(&target_profile);
-    if let Some(path) = &opencode_config_path {
-        println!("[ OK ] Config found: {:?}", path);
-    } else {
-        eprintln!(
-            "[WARN] No matching opencode config found in runtime cache for profile: {}",
-            target_profile
-        );
-    }
-
     apply_vram_limits().await;
 
     let home = std::env::var("HOME")?;
@@ -191,13 +181,6 @@ pub async fn serve(
         args.push(tb.to_string());
     }
 
-    persist_profile(
-        &target_profile,
-        preset_path.to_str().unwrap(),
-        &opencode_config_path,
-    )
-    .await?;
-
     if foreground {
         println!("[PROC] Starting llama.cpp Server (Direct Mode)...");
         println!("   Binding Address : http://{}:{}", bind_host, server_port);
@@ -314,34 +297,39 @@ pub async fn stop() -> Result<(), color_eyre::Report> {
 
 pub async fn status() -> Result<(), color_eyre::Report> {
     let home = std::env::var("HOME")?;
-    let profile_path = PathBuf::from(&home).join(".cache/muthr/opencode-profile");
+    let active_path = PathBuf::from(&home).join(".cache/muthr/active-preset.ini");
 
-    if !profile_path.exists() {
+    if !active_path.exists() {
         println!("[STATUS] No active profile configured.");
         return Ok(());
     }
 
-    let content = fs::read_to_string(&profile_path).await?;
-    let mut preset_path = String::new();
-    let mut config_path = String::new();
+    let preset_path = preset::resolve_preset(
+        &PathBuf::from(&home)
+            .join(".cache/muthr/active-preset.ini")
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .map(String::from)
+            .unwrap_or_default(),
+    );
 
-    for line in content.lines() {
-        if line.starts_with("export LLAMA_ARG_MODELS_PRESET=") {
-            preset_path = parse_export_value(line);
-        } else if line.starts_with("export OPENCODE_CONFIG=") {
-            config_path = parse_export_value(line);
-        }
-    }
+    let preset = if let Some(p) = preset_path {
+        preset::parse_preset(&p).ok()
+    } else {
+        None
+    };
 
-    let preset_basename: String = PathBuf::from(&preset_path)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .map(String::from)
-        .unwrap_or(preset_path.clone());
+    let preset_basename = preset
+        .as_ref()
+        .map(|p| p.name.clone())
+        .unwrap_or_else(|| "unknown".to_string());
 
     println!("[STATUS] Active profile: {}", preset_basename);
-    println!("   Preset:     {}", preset_path);
-    println!("   OpenCode:   {}", config_path);
+    if let Some(p) = &preset {
+        println!("   Preset:     {}", p.path.display());
+    } else {
+        println!("   Preset:     (not found on disk)");
+    }
 
     let is_running = AsyncCommand::new("pgrep")
         .arg("-x")
@@ -369,20 +357,14 @@ pub fn list() -> Result<(), color_eyre::Report> {
 
     let mut rows: Vec<Vec<String>> = Vec::new();
     for p in &presets {
-        let config_status = if preset::resolve_opencode_config(&p.name).is_some() {
-            "✓".to_string()
-        } else {
-            "✗".to_string()
-        };
         rows.push(vec![
             p.name.clone(),
             p.path.to_string_lossy().to_string(),
             p.slots.len().to_string(),
-            config_status,
         ]);
     }
 
-    let headers = vec!["Preset", "Path", "Slots", "Config"];
+    let headers = vec!["Preset", "Path", "Slots"];
 
     match ui::select_table(&headers, rows) {
         Some(idx) => println!("{}", presets[idx].name),
@@ -392,17 +374,11 @@ pub fn list() -> Result<(), color_eyre::Report> {
                 "==============================================================================="
             );
             for p in &presets {
-                let config_status = if preset::resolve_opencode_config(&p.name).is_some() {
-                    "✓"
-                } else {
-                    "✗"
-                };
                 println!(
-                    "  {:<30} {} [{}] {}",
+                    "  {:<30} {} [{}]",
                     p.name,
                     p.path.to_string_lossy(),
-                    p.slots.len(),
-                    config_status
+                    p.slots.len()
                 );
             }
             println!(
@@ -412,13 +388,6 @@ pub fn list() -> Result<(), color_eyre::Report> {
     }
 
     Ok(())
-}
-
-fn parse_export_value(line: &str) -> String {
-    if let Some((_, val)) = line.split_once('=') {
-        return val.trim_matches('"').to_string();
-    }
-    String::new()
 }
 
 async fn apply_vram_limits() {
@@ -453,34 +422,4 @@ async fn sysctl_memsize() -> u64 {
         }
         _ => 0,
     }
-}
-
-async fn persist_profile(
-    _preset: &str,
-    preset_path: &str,
-    config_path: &Option<PathBuf>,
-) -> Result<(), color_eyre::Report> {
-    let home = std::env::var("HOME")?;
-    let cache_dir = PathBuf::from(&home).join(".cache/muthr");
-    fs::create_dir_all(&cache_dir).await?;
-    let config_file = cache_dir.join("opencode-profile");
-
-    let config_value = config_path
-        .as_ref()
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|| "not set".to_string());
-
-    let content = format!(
-        "export LLAMA_ARG_MODELS_PRESET=\"{}\"\nexport OPENCODE_CONFIG=\"{}\"",
-        preset_path, config_value
-    );
-    fs::write(&config_file, content).await.map_err(|e| {
-        color_eyre::eyre::eyre!(
-            "Failed to persist profile to {}: {}",
-            config_file.display(),
-            e
-        )
-    })?;
-
-    Ok(())
 }
