@@ -412,7 +412,11 @@ async fn apply_vram_limits(foreground: bool) {
         );
         println!("[PROC] Adjusting Metal VRAM limits (requires sudo access)...");
         let _ = AsyncCommand::new("sudo")
-            .args(["sysctl", "-w", &format!("iogpu.wired_limit_mb={}", wired_mb)])
+            .args([
+                "sysctl",
+                "-w",
+                &format!("iogpu.wired_limit_mb={}", wired_mb),
+            ])
             .output()
             .await;
     }
