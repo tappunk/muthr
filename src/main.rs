@@ -88,15 +88,6 @@ enum Commands {
         file: Option<String>,
     },
 
-    #[command(about = "Run darwin-rebuild and synchronize Neovim configurations")]
-    Rebase {
-        #[arg(
-            long,
-            help = "Skip the dry-run configuration switch preview and proceed directly"
-        )]
-        yes: bool,
-    },
-
     #[command(about = "Remove .DS_Store files from the workspace")]
     Clean,
 
@@ -162,7 +153,6 @@ async fn run() -> Result<(), color_eyre::Report> {
         Commands::Ls => sandbox::list().await?,
         Commands::Services { action } => services::run(action).await?,
         Commands::Download { source, file } => download::download(&source, file.as_deref()).await?,
-        Commands::Rebase { yes } => system::rebase(yes).await?,
         Commands::Clean => system::clean().await?,
         Commands::Themes => theme::run()?,
         Commands::Init { git_url, force } => init::run(init::InitCommands { git_url, force })?,

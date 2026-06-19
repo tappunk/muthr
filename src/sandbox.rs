@@ -477,11 +477,7 @@ pub async fn list() -> Result<(), color_eyre::Report> {
                 .unwrap_or_else(|| "Unknown".to_string());
 
             let project = vm.strip_suffix(sandbox_suffix).unwrap_or(vm);
-            let mount_point = if project == "dotfiles" {
-                "/sandbox-dotfiles"
-            } else {
-                &format!("/sandbox-{}", project)
-            };
+            let mount_point = format!("/sandbox-{}", project);
             println!("  {:<30} {}  Mount: {}", vm, status, mount_point);
         }
     } else {
@@ -503,11 +499,7 @@ pub async fn list() -> Result<(), color_eyre::Report> {
                 .unwrap_or_else(|| "Unknown".to_string());
 
             let project = vm.strip_suffix(sandbox_suffix).unwrap_or(vm);
-            let mount_point = if project == "dotfiles" {
-                "/sandbox-dotfiles"
-            } else {
-                &format!("/sandbox-{}", project)
-            };
+            let mount_point = format!("/sandbox-{}", project);
             rows.push(vec![vm.clone(), status, mount_point.to_string()]);
         }
 
