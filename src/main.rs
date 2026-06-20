@@ -180,7 +180,7 @@ async fn boot(verbose: bool) -> Result<(), color_eyre::Report> {
         engine::serve(None, server_port, false).await?;
     }
 
-    let vm_name = "mcp-services-vm";
+    let vm_name = "muthr-services";
     let output = AsyncCommand::new("limactl")
         .args(["ls", "-f", "'{{.Status}}'", vm_name])
         .output()

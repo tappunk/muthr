@@ -15,7 +15,7 @@ async fn discover_sandbox_vms() -> Vec<String> {
     match output {
         Some(out) => String::from_utf8_lossy(&out.stdout)
             .lines()
-            .filter(|v| v.ends_with("-sandbox"))
+            .filter(|v| v.starts_with("muthr-"))
             .map(|v| v.to_string())
             .collect(),
         None => Vec::new(),
@@ -95,7 +95,7 @@ pub async fn run(verbose: bool, timeout_secs: Option<u64>) {
         stop_vm(vm.clone(), timeout, verbose).await;
     }
 
-    stop_vm("mcp-services-vm".to_string(), timeout, verbose).await;
+    stop_vm("muthr-services".to_string(), timeout, verbose).await;
 
     if verbose {
         println!("[PROC] Tearing down local hardware inference loops...");

@@ -71,7 +71,7 @@ pub fn resolve_workspace_context() -> Result<(String, PathBuf, PathBuf), color_e
     let muthr_config_dir = PathBuf::from(&home).join(".config/muthr");
     if paths_are_prefix(&current_dir, &muthr_config_dir) {
         return Ok((
-            "muthr-config-sandbox".to_string(),
+            "muthr-config".to_string(),
             muthr_config_dir.clone(),
             current_dir,
         ));
@@ -93,7 +93,7 @@ pub fn resolve_workspace_context() -> Result<(String, PathBuf, PathBuf), color_e
         }
 
         Some((
-            format!("{}-sandbox", sanitized),
+            format!("muthr-{}", sanitized),
             workspace_path.join(&sanitized),
         ))
     })();
@@ -140,7 +140,7 @@ pub fn resolve_workspace_context() -> Result<(String, PathBuf, PathBuf), color_e
             }
 
             (
-                format!("{}-sandbox", sanitized),
+                format!("muthr-{}", sanitized),
                 can_workspace.join(&sanitized),
             )
         }
@@ -491,8 +491,8 @@ pub async fn down() -> Result<(), color_eyre::Report> {
 }
 
 pub async fn list() -> Result<(), color_eyre::Report> {
-    let sandbox_suffix = "-sandbox";
-    println!("[INFO] Sandbox VMs:");
+    let muthr_prefix = "muthr-";
+    println!("[INFO] Managed VMs:");
     println!("===============================================================================");
 
     let output = Command::new("limactl")
@@ -504,14 +504,14 @@ pub async fn list() -> Result<(), color_eyre::Report> {
     let vms: Vec<String> = match output {
         Some(out) if out.status.success() => String::from_utf8_lossy(&out.stdout)
             .lines()
-            .filter(|v| v.ends_with(sandbox_suffix))
+            .filter(|v| v.starts_with(muthr_prefix))
             .map(|v| v.to_string())
             .collect(),
         _ => Vec::new(),
     };
 
     if vms.is_empty() {
-        println!("[WARN] No sandbox VMs found");
+        println!("[WARN] No managed VMs found");
         return Ok(());
     }
 
@@ -533,8 +533,8 @@ pub async fn list() -> Result<(), color_eyre::Report> {
                 })
                 .unwrap_or_else(|| "Unknown".to_string());
 
-            let project = vm.strip_suffix(sandbox_suffix).unwrap_or(vm);
-            let mount_point = format!("/sandbox-{}", project);
+            let project = vm.strip_prefix(muthr_prefix).unwrap_or(vm);
+            let mount_point = format!("/muthr-{}", project);
             println!("  {:<30} {}  Mount: {}", vm, status, mount_point);
         }
     } else {
@@ -555,8 +555,8 @@ pub async fn list() -> Result<(), color_eyre::Report> {
                 })
                 .unwrap_or_else(|| "Unknown".to_string());
 
-            let project = vm.strip_suffix(sandbox_suffix).unwrap_or(vm);
-            let mount_point = format!("/sandbox-{}", project);
+            let project = vm.strip_prefix(muthr_prefix).unwrap_or(vm);
+            let mount_point = format!("/muthr-{}", project);
             rows.push(vec![vm.clone(), status, mount_point.to_string()]);
         }
 

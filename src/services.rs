@@ -17,7 +17,7 @@ pub async fn run(action: crate::ServicesCommands) -> Result<(), color_eyre::Repo
 pub async fn start() -> Result<(), color_eyre::Report> {
     println!("[PROC] Starting MCP VM...");
 
-    let vm_name = "mcp-services-vm";
+    let vm_name = "muthr-services";
     let home = std::env::var("HOME")?;
     let template_path = PathBuf::from(&home).join(".config/muthr/manifests/mcp-services.yaml");
 
@@ -119,7 +119,7 @@ pub async fn start() -> Result<(), color_eyre::Report> {
 }
 
 pub async fn stop() -> Result<(), color_eyre::Report> {
-    let vm_name = "mcp-services-vm";
+    let vm_name = "muthr-services";
 
     if !is_vm_exists(vm_name) {
         println!("[WARN] MCP VM '{}' does not exist", vm_name);
@@ -146,7 +146,7 @@ pub async fn stop() -> Result<(), color_eyre::Report> {
 }
 
 pub async fn status() -> Result<(), color_eyre::Report> {
-    let vm_name = "mcp-services-vm";
+    let vm_name = "muthr-services";
 
     println!("[INFO] MCP VM Status:");
     println!("===============================================================================");
