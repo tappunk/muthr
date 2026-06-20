@@ -43,6 +43,19 @@ fn physical_cpu_count() -> u32 {
         }
     }
 
+    let output = std::process::Command::new("sysctl")
+        .args(["-n", "hw.logicalcpu"])
+        .output();
+    if let Ok(out) = output {
+        if out.status.success() {
+            let raw = String::from_utf8_lossy(&out.stdout);
+            let digits: String = raw.chars().filter(|c| c.is_ascii_digit()).collect();
+            if let Ok(count) = digits.parse::<u32>() {
+                return count;
+            }
+        }
+    }
+
     std::thread::available_parallelism()
         .map(|p| p.get() as u32)
         .unwrap_or(4)
@@ -65,15 +78,19 @@ async fn is_llama_server_pid(pid: u32) -> bool {
         return false;
     }
     let output = AsyncCommand::new("ps")
-        .args(["-p", &pid.to_string(), "-o", "comm="])
+        .args(["-p", &pid.to_string(), "-o", "comm=", "-o", "args="])
         .output()
         .await;
     if let Ok(out) = output {
-        let comm = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        comm.ends_with("llama-server")
-    } else {
-        false
+        let ps_output = String::from_utf8_lossy(&out.stdout);
+        for line in ps_output.lines() {
+            let trimmed = line.trim();
+            if trimmed.contains("llama-server") {
+                return true;
+            }
+        }
     }
+    false
 }
 
 pub async fn is_running() -> bool {

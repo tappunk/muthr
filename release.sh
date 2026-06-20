@@ -92,12 +92,11 @@ fi
 INITIAL_COMMIT=$(git rev-parse HEAD)
 rollback() {
   echo ""
-  echo "[CRIT] Release pipeline interrupted! Commencing local rollback..."
-  git reset --hard "$INITIAL_COMMIT"
+  echo "[CRIT] Release pipeline interrupted!"
   if git rev-parse "v$NEW_VERSION" >/dev/null 2>&1; then
     git tag -d "v$NEW_VERSION"
   fi
-  echo "[ OK ] Rollback successful. Local repository state restored cleanly."
+  echo "[WARN] Local repo left intact. Review staged changes manually."
 }
 trap rollback ERR
 

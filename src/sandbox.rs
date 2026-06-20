@@ -390,15 +390,33 @@ pub async fn up(port: u16, profile: ProvisionProfile) -> Result<(), color_eyre::
     let (vm_name, mount_point, workdir) = resolve_workspace_context()?;
     println!("[INFO] Target Virtual Environment Context: {}", vm_name);
 
-    if !engine::verify_health(port).await {
-        return Err(color_eyre::eyre::eyre!(
-            "Inference pipeline unreachable at 127.0.0.1:{}. Run 'muthr serve' first.",
-            port
-        ));
-    }
-
     let home = std::env::var("HOME")?;
     let presets = preset::list_presets()?;
+
+    let effective_port = if !presets.is_empty() {
+        let preset_name =
+            fs::read_to_string(PathBuf::from(&home).join(".cache/muthr/active-preset-name"))
+                .await
+                .unwrap_or_default();
+        if !preset_name.is_empty() {
+            if let Some(p) = presets.iter().find(|p| p.name == preset_name) {
+                p.global.port.map(|p| p as u16).unwrap_or(port)
+            } else {
+                port
+            }
+        } else {
+            port
+        }
+    } else {
+        port
+    };
+
+    if !engine::verify_health(effective_port).await {
+        return Err(color_eyre::eyre::eyre!(
+            "Inference pipeline unreachable at 127.0.0.1:{}. Run 'muthr serve' first.",
+            effective_port
+        ));
+    }
 
     if !vm_exists(&vm_name).await {
         vm_create(&vm_name, &mount_point, &mount_point).await?;
@@ -410,10 +428,10 @@ pub async fn up(port: u16, profile: ProvisionProfile) -> Result<(), color_eyre::
 
     handle_provisioning(&vm_name, &profile).await?;
 
-    let loaded_model = model::poll_loaded_model("127.0.0.1", port, 20, 1.5).await?;
+    let loaded_model = model::poll_loaded_model("127.0.0.1", effective_port, 20, 1.5).await?;
     println!("[INFO] Model detected: {}", loaded_model);
 
-    let ctx_window = model::get_ctx_window("127.0.0.1", port).await?;
+    let ctx_window = model::get_ctx_window("127.0.0.1", effective_port).await?;
     println!("[INFO] Context window: {}", ctx_window);
 
     let preset_name =
@@ -429,7 +447,7 @@ pub async fn up(port: u16, profile: ProvisionProfile) -> Result<(), color_eyre::
     .or(presets.first());
 
     let runtime_config = match selected_preset {
-        Some(p) => crate::runtime_config::generate_runtime_config(p, port, &mount_point)?,
+        Some(p) => crate::runtime_config::generate_runtime_config(p, effective_port, &mount_point)?,
         None => {
             return Err(color_eyre::eyre::eyre!(
                 "No presets available for config generation"
@@ -504,7 +522,7 @@ pub async fn list() -> Result<(), color_eyre::Report> {
     let vms: Vec<String> = match output {
         Some(out) if out.status.success() => String::from_utf8_lossy(&out.stdout)
             .lines()
-            .filter(|v| v.starts_with(muthr_prefix))
+            .filter(|v| v.starts_with(muthr_prefix) && *v != "muthr-services")
             .map(|v| v.to_string())
             .collect(),
         _ => Vec::new(),

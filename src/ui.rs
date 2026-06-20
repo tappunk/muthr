@@ -194,7 +194,17 @@ fn render_table(frame: &mut Frame, headers: &[&str], rows: &[Vec<String>], state
     ]);
     frame.render_widget(title.centered(), header_area);
 
-    let widths: Vec<Constraint> = headers.iter().map(|_| Constraint::Length(20)).collect();
+    let table_width = table_area.width.saturating_sub(2);
+    let num_cols = headers.len().max(1);
+    let base_width = (table_width as usize / num_cols).max(8);
+
+    let max_col_width: usize = 30;
+    let effective_width = std::cmp::min(base_width, max_col_width);
+
+    let widths: Vec<Constraint> = headers
+        .iter()
+        .map(|_| Constraint::Length(effective_width as u16))
+        .collect();
     let table_rows: Vec<Row> = rows
         .iter()
         .map(|row| Row::new(row.iter().map(|s| Line::from(s.as_str()))))
