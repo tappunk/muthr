@@ -133,7 +133,7 @@ enum Commands {
     Init {
         #[arg(
             long,
-            help = "Custom Git URL for muthr-configs repository source override"
+            help = "Custom Git URL for muthr-specs repository source override"
         )]
         git_url: Option<String>,
         #[arg(

@@ -33,10 +33,10 @@ pub fn run(cmd: InitCommands) -> Result<(), color_eyre::Report> {
 
     let repo_url = cmd
         .git_url
-        .unwrap_or_else(|| "https://github.com/tappunk/muthr-configs.git".to_string());
+        .unwrap_or_else(|| "https://github.com/tappunk/muthr-specs.git".to_string());
 
     println!(
-        "[INIT] Cloning muthr-configs into {}...",
+        "[INIT] Cloning muthr-specs into {}...",
         config_dir.display()
     );
     println!("[INIT] Source: {}", repo_url);
@@ -52,7 +52,7 @@ pub fn run(cmd: InitCommands) -> Result<(), color_eyre::Report> {
         .status()?;
 
     if !status.success() {
-        eprintln!("[ERR] Failed to clone muthr-configs repository.");
+        eprintln!("[ERR] Failed to clone muthr-specs repository.");
         std::process::exit(1);
     }
 

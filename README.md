@@ -23,7 +23,7 @@ macOS (Apple Silicon, ≥48GB RAM for 35B models), [Lima](https://github.com/lim
 ## Usage
 
 ```bash
-muthr init               # Clone configs from tappunk/muthr-configs
+muthr init               # Clone specs from tappunk/muthr-specs
 muthr download <source>  # Fetch GGUF model from HuggingFace
 
 muthr serve              # Start llama-server as a background daemon
@@ -45,7 +45,7 @@ muthr shutdown           # Graceful shutdown of all owned components
 
 ## Configuration
 
-Config in `~/.config/muthr/` (see [muthr-configs](https://github.com/tappunk/muthr-configs) for the full directory structure and examples):
+Config in `~/.config/muthr/` (see [muthr-specs](https://github.com/tappunk/muthr-specs) for the full directory structure and examples):
 
 - `provider.d/llama-cpp/*.ini` — preset profiles (context sizes, threading, model paths)
 - `clients/opencode-config.json` — template for OpenCode runtime config generation
