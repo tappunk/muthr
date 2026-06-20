@@ -91,11 +91,9 @@ pub async fn run(verbose: bool, timeout_secs: Option<u64>) {
 
     let sandboxes = discover_sandbox_vms().await;
 
-    let mut tasks = tokio::task::JoinSet::new();
     for vm in sandboxes {
-        tasks.spawn(stop_vm(vm.clone(), timeout, verbose));
+        stop_vm(vm.clone(), timeout, verbose).await;
     }
-    while tasks.join_next().await.is_some() {}
 
     stop_vm("mcp-services-vm".to_string(), timeout, verbose).await;
 

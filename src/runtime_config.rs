@@ -37,10 +37,12 @@ pub fn generate_runtime_config(
 
     let model_id = format!("01-{}", primary_slot.name);
     let ctx_window = primary_slot.ctx_size.unwrap_or(200000);
+    let ctx_str = ctx_window.to_string();
+
+    let content = content.replace("__CTX_WINDOW__", &ctx_str);
 
     let mut config: Value = serde_json::from_str(&content)?;
 
-    let ctx_str = ctx_window.to_string();
     let port_str = port.to_string();
     let mount_str = mount_point.to_string_lossy().into_owned();
 

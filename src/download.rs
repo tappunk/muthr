@@ -103,25 +103,20 @@ fn parse_hf_url(url: &str) -> Result<(String, String), color_eyre::Report> {
         .strip_prefix("huggingface.co/")
         .ok_or_else(|| color_eyre::eyre::eyre!("Invalid HuggingFace URL format"))?;
 
-    let separators = ["/blob/main/", "/raw/main/"];
-    let mut split_res = None;
-    for sep in separators {
-        if let Some(idx) = tmp.find(sep) {
-            let repo = tmp[..idx].to_string();
-            let filename = tmp[idx + sep.len()..].to_string();
-            split_res = Some((repo, filename));
-            break;
-        }
-    }
-
-    let (repo, filename) =
-        split_res.ok_or_else(|| color_eyre::eyre::eyre!("Invalid HuggingFace URL"))?;
+    let mut parts = tmp.splitn(3, '/');
+    let repo = parts
+        .next()
+        .ok_or_else(|| color_eyre::eyre::eyre!("Invalid HuggingFace URL"))?;
+    let _rev_or_blob = parts.next();
+    let filename = parts.next().ok_or_else(|| {
+        color_eyre::eyre::eyre!("Invalid HuggingFace URL — expected repo/blob/revision/filename")
+    })?;
 
     if filename.is_empty() {
         return Err(color_eyre::eyre::eyre!("Missing filename in URL"));
     }
 
-    Ok((repo, filename))
+    Ok((repo.to_string(), filename.to_string()))
 }
 
 fn human_size(bytes: u64) -> String {

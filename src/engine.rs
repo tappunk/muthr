@@ -136,7 +136,7 @@ pub async fn serve(
     fs::write(&tmp_preset, expanded).await?;
     fs::write(cache_dir.join("active-preset-name"), &target_profile).await?;
 
-    let preset = preset::parse_preset(&preset_path)?;
+    let preset = preset::parse_preset(&tmp_preset)?;
     let bind_host = preset
         .global
         .host

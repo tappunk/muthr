@@ -11,9 +11,6 @@ pub fn run(cmd: InitCommands) -> Result<(), color_eyre::Report> {
 
     if cmd.force {
         println!("[INIT] Overwriting existing muthr configs...");
-        if config_dir.exists() {
-            remove_dir_all(&config_dir)?;
-        }
     } else if config_dir.exists() {
         let entries: Vec<_> = std::fs::read_dir(&config_dir)?
             .filter_map(|e| e.ok())
@@ -33,12 +30,18 @@ pub fn run(cmd: InitCommands) -> Result<(), color_eyre::Report> {
 
     let repo_url = cmd
         .git_url
+        .clone()
         .unwrap_or_else(|| "https://github.com/tappunk/muthr-specs.git".to_string());
 
-    println!(
-        "[INIT] Cloning muthr-specs into {}...",
-        config_dir.display()
-    );
+    let tmp_dir = std::env::temp_dir().join(format!(
+        "muthr-init-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+
+    println!("[INIT] Cloning muthr-specs into {}...", tmp_dir.display());
     println!("[INIT] Source: {}", repo_url);
 
     let status = Command::new("git")
@@ -47,14 +50,23 @@ pub fn run(cmd: InitCommands) -> Result<(), color_eyre::Report> {
             "--depth",
             "1",
             &repo_url,
-            config_dir.to_str().unwrap(),
+            tmp_dir.to_str().unwrap(),
         ])
         .status()?;
 
     if !status.success() {
+        let _ = std::fs::remove_dir_all(&tmp_dir);
         eprintln!("[ERR] Failed to clone muthr-specs repository.");
         std::process::exit(1);
     }
+
+    if cmd.force && config_dir.exists() {
+        println!("[INIT] Removing existing config directory...");
+        remove_dir_all(&config_dir)?;
+    }
+
+    std::fs::rename(&tmp_dir, &config_dir)
+        .map_err(|e| color_eyre::eyre::eyre!("Failed to install configs: {}", e))?;
 
     println!("[OK] muthr configs installed successfully.");
     println!();

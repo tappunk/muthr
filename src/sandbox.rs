@@ -3,32 +3,33 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use tempfile::NamedTempFile;
 use tokio::fs;
+use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
 fn paths_are_prefix(current: &Path, potential_parent: &Path) -> bool {
-    let current_str = current.to_string_lossy();
-    let parent_str = potential_parent.to_string_lossy();
-
-    if current_str.starts_with(parent_str.as_ref()) || current_str == parent_str {
-        return true;
-    }
-
-    if let (Ok(can_current), Ok(can_parent)) = (
+    let (Ok(can_current), Ok(can_parent)) = (
         std::fs::canonicalize(current),
         std::fs::canonicalize(potential_parent),
-    ) {
-        let current_components: Vec<_> = can_current.components().collect();
-        let parent_components: Vec<_> = can_parent.components().collect();
-
-        if parent_components.len() <= current_components.len() {
-            return current_components
-                .iter()
-                .zip(parent_components.iter())
-                .all(|(a, b)| a == b);
+    ) else {
+        let current_parts: Vec<_> = current.components().collect();
+        let parent_parts: Vec<_> = potential_parent.components().collect();
+        if parent_parts.len() > current_parts.len() {
+            return false;
         }
-    }
+        return current_parts
+            .iter()
+            .zip(parent_parts.iter())
+            .all(|(a, b)| a == b);
+    };
 
-    false
+    let current_components: Vec<_> = can_current.components().collect();
+    let parent_components: Vec<_> = can_parent.components().collect();
+
+    parent_components.len() <= current_components.len()
+        && current_components
+            .iter()
+            .zip(parent_components.iter())
+            .all(|(a, b)| a == b)
 }
 
 use crate::config;
@@ -340,22 +341,25 @@ async fn run_provision(vm_name: &str, script_name: &str) -> Result<(), color_eyr
     }
 
     println!("[PROC] Running provision: {}...", script_name);
-    let script_str = host_script
-        .to_str()
-        .ok_or_else(|| color_eyre::eyre::eyre!("Invalid UTF-8 in provision script path"))?;
+    let script_content = fs::read_to_string(&host_script).await?;
 
     println!("[PROC] Waiting for dpkg/apt lock to be free...");
     wait_for_dpkg(vm_name, 120).await?;
 
-    let status = Command::new("bash")
-        .arg(script_str)
-        .arg(vm_name)
+    let mut child = Command::new("limactl")
+        .args(["shell", "--workdir", "/tmp", vm_name, "bash"])
+        .stdin(Stdio::piped())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
-        .status()
-        .await?;
+        .spawn()?;
 
-    if !status.success() {
+    if let Some(ref mut stdin) = child.stdin {
+        stdin.write_all(script_content.as_bytes()).await?;
+    }
+
+    let status = child.wait_with_output().await?;
+
+    if !status.status.success() {
         return Err(color_eyre::eyre::eyre!("Provision failed: {}", script_name));
     }
 
