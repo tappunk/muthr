@@ -12,7 +12,58 @@ pub async fn verify_health(port: u16) -> bool {
     model::verify_health("127.0.0.1", port).await
 }
 
+fn is_process_alive(pid: u32) -> bool {
+    unsafe { libc::kill(pid as i32, 0) == 0 }
+}
+
+fn physical_cpu_count() -> u32 {
+    let output = std::process::Command::new("sysctl")
+        .args(["-n", "hw.perflevel0.physicalcpu"])
+        .output();
+    if let Ok(out) = output {
+        if out.status.success() {
+            let raw = String::from_utf8_lossy(&out.stdout);
+            let digits: String = raw.chars().filter(|c| c.is_ascii_digit()).collect();
+            if let Ok(count) = digits.parse::<u32>() {
+                return count;
+            }
+        }
+    }
+
+    let output = std::process::Command::new("sysctl")
+        .args(["-n", "hw.physicalcpu"])
+        .output();
+    if let Ok(out) = output {
+        if out.status.success() {
+            let raw = String::from_utf8_lossy(&out.stdout);
+            let digits: String = raw.chars().filter(|c| c.is_ascii_digit()).collect();
+            if let Ok(count) = digits.parse::<u32>() {
+                return count;
+            }
+        }
+    }
+
+    std::thread::available_parallelism()
+        .map(|p| p.get() as u32)
+        .unwrap_or(4)
+}
+
+fn clamp_threads(value: u32, max_threads: u32) -> u32 {
+    if value > max_threads && value != 0 {
+        eprintln!(
+            "[WARN] Thread count {} exceeds physical CPU count ({}). Clamping to {}.",
+            value, max_threads, max_threads
+        );
+        max_threads
+    } else {
+        value
+    }
+}
+
 async fn is_llama_server_pid(pid: u32) -> bool {
+    if !is_process_alive(pid) {
+        return false;
+    }
     let output = AsyncCommand::new("ps")
         .args(["-p", &pid.to_string(), "-o", "comm="])
         .output()
@@ -23,6 +74,26 @@ async fn is_llama_server_pid(pid: u32) -> bool {
     } else {
         false
     }
+}
+
+pub async fn is_running() -> bool {
+    let home = std::env::var("HOME");
+    let pid_file = match home {
+        Ok(ref h) => PathBuf::from(h).join(".cache/muthr/llama-server.pid"),
+        Err(_) => return false,
+    };
+    if !pid_file.exists() {
+        return false;
+    }
+    let pid_bytes = match fs::read_to_string(&pid_file).await {
+        Ok(b) => b,
+        Err(_) => return false,
+    };
+    let pid = match pid_bytes.trim().parse::<u32>() {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+    is_llama_server_pid(pid).await
 }
 
 pub async fn serve(
@@ -71,6 +142,8 @@ pub async fn serve(
         .host
         .unwrap_or_else(|| "127.0.0.1".to_string());
     let server_port = preset.global.port.unwrap_or(port as u32) as u16;
+
+    let max_threads = physical_cpu_count();
 
     let log_stdout = cache_dir.join("llama-server.log");
     let log_stderr = cache_dir.join("llama-server-err.log");
@@ -174,12 +247,14 @@ pub async fn serve(
         args.push(ub.to_string());
     }
     if let Some(t) = preset.global.threads {
+        let clamped = clamp_threads(t, max_threads);
         args.push("--threads".to_string());
-        args.push(t.to_string());
+        args.push(clamped.to_string());
     }
     if let Some(tb) = preset.global.threads_batch {
+        let clamped = clamp_threads(tb, max_threads);
         args.push("--threads-batch".to_string());
-        args.push(tb.to_string());
+        args.push(clamped.to_string());
     }
 
     if foreground {
@@ -254,9 +329,9 @@ pub async fn stop() -> Result<(), color_eyre::Report> {
     let pid_bytes = fs::read_to_string(&pid_file).await?;
     let pid = pid_bytes.trim().parse::<u32>()?;
 
-    if !is_llama_server_pid(pid).await {
+    if !is_process_alive(pid) {
         println!(
-            "[WARN] PID {} is not llama-server (stale PID file). Cleaning up.",
+            "[WARN] PID {} not found (stale PID file). Cleaning up.",
             pid
         );
         fs::remove_file(&pid_file).await.ok();
@@ -273,9 +348,9 @@ pub async fn stop() -> Result<(), color_eyre::Report> {
         .await;
 
     let mut died = false;
-    for _ in 0..10 {
+    for _ in 0..30 {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        if !is_llama_server_pid(pid).await {
+        if !is_process_alive(pid) {
             died = true;
             break;
         }
@@ -284,7 +359,7 @@ pub async fn stop() -> Result<(), color_eyre::Report> {
     if died {
         println!("[ OK ] Server stopped gracefully. VRAM released.");
     } else {
-        eprintln!("[WARN] Server did not respond to SIGTERM. Escalating to SIGKILL.");
+        eprintln!("[WARN] Server did not respond to SIGTERM after 15s. Escalating to SIGKILL.");
         let _ = AsyncCommand::new("kill")
             .args(["-9", &pid.to_string()])
             .output()

@@ -157,7 +157,7 @@ pub async fn status() -> Result<(), color_eyre::Report> {
     }
 
     let status = Command::new("limactl")
-        .args(["ls", "-f", "'{{.Status}}'", vm_name])
+        .args(["ls", "-f", "{{.Status}}", vm_name])
         .output()
         .ok()
         .and_then(|out| {
@@ -206,14 +206,14 @@ fn is_vm_exists(vm_name: &str) -> bool {
 
 fn is_vm_running(vm_name: &str) -> bool {
     let output = Command::new("limactl")
-        .args(["ls", "-f", "'{{.Status}}'", vm_name])
+        .args(["ls", "-f", "{{.Status}}", vm_name])
         .output()
         .ok();
 
     match output {
         Some(out) if out.status.success() => {
-            let status = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            status == "Running"
+            let status = String::from_utf8_lossy(&out.stdout);
+            status.contains("Running")
         }
         _ => false,
     }

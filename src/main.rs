@@ -7,11 +7,13 @@ pub mod preset;
 pub mod runtime_config;
 pub mod sandbox;
 pub mod services;
+pub mod shutdown;
 pub mod theme;
 pub mod ui;
 
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{generate, Shell};
+use tokio::process::Command as AsyncCommand;
 
 use crate::config::ConfigCommands;
 use crate::sandbox::ProvisionProfile;
@@ -87,6 +89,26 @@ enum Commands {
         action: ServicesCommands,
     },
 
+    #[command(about = "Full stack startup: inference engine + MCP services VM")]
+    Boot {
+        #[arg(long, help = "Show detailed progress output during boot")]
+        verbose: bool,
+    },
+
+    #[command(
+        about = "Graceful shutdown of all owned components: sandboxes, MCP services VM, and inference engine"
+    )]
+    Shutdown {
+        #[arg(long, help = "Show detailed progress output during shutdown")]
+        verbose: bool,
+        #[arg(
+            long,
+            value_name = "SECONDS",
+            help = "Timeout per component in seconds (default: 30)"
+        )]
+        timeout: Option<u64>,
+    },
+
     #[command(about = "Download a GGUF model from Hugging Face")]
     Download {
         #[arg(help = "Hugging Face repository (repo/name) or explicit resolve URL")]
@@ -146,6 +168,44 @@ async fn main() -> color_eyre::Result<()> {
     run().await
 }
 
+async fn boot(verbose: bool) -> Result<(), color_eyre::Report> {
+    if engine::is_running().await {
+        println!("[OK] Engine already running.");
+    } else {
+        if verbose {
+            println!("[PROC] Starting inference engine...");
+        }
+        let cfg = config::load()?;
+        let server_port = cfg.port.unwrap_or(8080);
+        engine::serve(None, server_port, false).await?;
+    }
+
+    let vm_name = "mcp-services-vm";
+    let output = AsyncCommand::new("limactl")
+        .args(["ls", "-f", "'{{.Status}}'", vm_name])
+        .output()
+        .await
+        .ok();
+    let running = match output {
+        Some(out) if out.status.success() => {
+            String::from_utf8_lossy(&out.stdout).trim() == "Running"
+        }
+        _ => false,
+    };
+
+    if running {
+        println!("[OK] MCP services already running.");
+    } else {
+        if verbose {
+            println!("[PROC] Starting MCP services VM...");
+        }
+        services::start().await?;
+    }
+
+    println!("[OK] Boot complete.");
+    Ok(())
+}
+
 async fn run() -> Result<(), color_eyre::Report> {
     let cli = Cli::parse();
 
@@ -198,6 +258,10 @@ async fn run() -> Result<(), color_eyre::Report> {
         Commands::Down => sandbox::down().await?,
         Commands::Ls => sandbox::list().await?,
         Commands::Services { action } => services::run(action).await?,
+        Commands::Boot { verbose } => boot(verbose).await?,
+        Commands::Shutdown { verbose, timeout } => {
+            shutdown::run(verbose, timeout).await;
+        }
         Commands::Download { source, file } => download::download(&source, file.as_deref()).await?,
         Commands::Themes => theme::run()?,
         Commands::Init { git_url, force } => init::run(init::InitCommands { git_url, force })?,

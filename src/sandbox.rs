@@ -5,6 +5,32 @@ use tempfile::NamedTempFile;
 use tokio::fs;
 use tokio::process::Command;
 
+fn paths_are_prefix(current: &Path, potential_parent: &Path) -> bool {
+    let current_str = current.to_string_lossy();
+    let parent_str = potential_parent.to_string_lossy();
+
+    if current_str.starts_with(parent_str.as_ref()) || current_str == parent_str {
+        return true;
+    }
+
+    if let (Ok(can_current), Ok(can_parent)) = (
+        std::fs::canonicalize(current),
+        std::fs::canonicalize(potential_parent),
+    ) {
+        let current_components: Vec<_> = can_current.components().collect();
+        let parent_components: Vec<_> = can_parent.components().collect();
+
+        if parent_components.len() <= current_components.len() {
+            return current_components
+                .iter()
+                .zip(parent_components.iter())
+                .all(|(a, b)| a == b);
+        }
+    }
+
+    false
+}
+
 use crate::config;
 use crate::engine;
 use crate::model;
@@ -30,7 +56,6 @@ impl std::fmt::Display for ProvisionProfile {
 
 pub fn resolve_workspace_context() -> Result<(String, PathBuf, PathBuf), color_eyre::Report> {
     let current_dir = std::env::current_dir()?;
-    let canonical_current = std::fs::canonicalize(&current_dir)?;
     let home = std::env::var("HOME")?;
 
     let raw_workspace_root = if let Ok(v) = std::env::var("MUTHR_WORKSPACE_ROOT") {
@@ -41,58 +66,86 @@ pub fn resolve_workspace_context() -> Result<(String, PathBuf, PathBuf), color_e
     } else {
         format!("{}/src", home)
     };
-    let canonical_workspace = std::fs::canonicalize(Path::new(&raw_workspace_root))
-        .unwrap_or_else(|_| PathBuf::from(&raw_workspace_root));
 
-    let mut inside_muthr_config = false;
-    if let Ok(muthr_config_dir) = std::fs::canonicalize(PathBuf::from(&home).join(".config/muthr"))
-    {
-        if canonical_current.starts_with(&muthr_config_dir) {
-            inside_muthr_config = true;
-        }
-    }
-
-    if inside_muthr_config {
+    let muthr_config_dir = PathBuf::from(&home).join(".config/muthr");
+    if paths_are_prefix(&current_dir, &muthr_config_dir) {
         return Ok((
             "muthr-config-sandbox".to_string(),
-            PathBuf::from(&home).join(".config/muthr"),
+            muthr_config_dir.clone(),
             current_dir,
         ));
     }
 
-    if canonical_current.starts_with(&canonical_workspace) {
-        if canonical_current == canonical_workspace {
-            return Err(color_eyre::eyre::eyre!(
-                "Navigate into a project directory first."
-            ));
-        }
-        let relative = canonical_current.strip_prefix(&canonical_workspace)?;
-        let project_folder = relative
-            .components()
-            .next()
-            .ok_or_else(|| color_eyre::eyre::eyre!("Invalid workspace path"))?
-            .as_os_str()
-            .to_str()
-            .ok_or_else(|| color_eyre::eyre::eyre!("Invalid project name"))?
-            .to_string();
+    let workspace_path = PathBuf::from(&raw_workspace_root);
 
-        let sanitized: String = project_folder
+    let result = (|| -> Option<(String, PathBuf)> {
+        let relative = current_dir.strip_prefix(&workspace_path).ok()?;
+        let project_name = relative.components().next()?.as_os_str().to_str()?;
+
+        let sanitized: String = project_name
             .chars()
             .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
             .collect();
 
         if sanitized.is_empty() {
-            return Err(color_eyre::eyre::eyre!("Sanitized project name is empty"));
+            return None;
         }
 
-        let vm_name = format!("{}-sandbox", sanitized);
-        let mount_point = PathBuf::from(&raw_workspace_root).join(&project_folder);
-        Ok((vm_name, mount_point, current_dir))
-    } else {
-        Err(color_eyre::eyre::eyre!(
-            "Sandbox tasks are restricted to project workspaces or the muthr configuration directory."
+        Some((
+            format!("{}-sandbox", sanitized),
+            workspace_path.join(&sanitized),
         ))
-    }
+    })();
+
+    let (project_folder, mount_point) = match result {
+        Some(v) => v,
+        None => {
+            let can_current = std::fs::canonicalize(&current_dir).map_err(|e| {
+                color_eyre::eyre::eyre!("Failed to canonicalize current directory: {}", e)
+            })?;
+            let can_workspace = workspace_path.canonicalize().map_err(|e| {
+                color_eyre::eyre::eyre!("Failed to canonicalize workspace root: {}", e)
+            })?;
+
+            if can_current == can_workspace {
+                return Err(color_eyre::eyre::eyre!(
+                    "Navigate into a project directory first."
+                ));
+            }
+
+            let relative = can_current
+                .strip_prefix(&can_workspace)
+                .ok()
+                .ok_or_else(|| {
+                    color_eyre::eyre::eyre!(
+                        "Current directory is not within the canonicalized workspace root"
+                    )
+                })?;
+            let project_name = relative
+                .components()
+                .next()
+                .ok_or_else(|| color_eyre::eyre::eyre!("Invalid workspace path"))?
+                .as_os_str()
+                .to_str()
+                .ok_or_else(|| color_eyre::eyre::eyre!("Invalid project name"))?;
+
+            let sanitized: String = project_name
+                .chars()
+                .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
+                .collect();
+
+            if sanitized.is_empty() {
+                return Err(color_eyre::eyre::eyre!("Sanitized project name is empty"));
+            }
+
+            (
+                format!("{}-sandbox", sanitized),
+                can_workspace.join(&sanitized),
+            )
+        }
+    };
+
+    Ok((project_folder, mount_point, current_dir))
 }
 
 pub async fn vm_exists(vm_name: &str) -> bool {
@@ -116,15 +169,15 @@ pub async fn vm_exists(vm_name: &str) -> bool {
 
 pub async fn vm_is_running(vm_name: &str) -> bool {
     let output = Command::new("limactl")
-        .args(["ls", "-f", "'{{.Status}}'", vm_name])
+        .args(["ls", "-f", "{{.Status}}", vm_name])
         .output()
         .await
         .ok();
 
     if let Some(out) = output {
         if out.status.success() {
-            let status = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            return status == "Running";
+            let status = String::from_utf8_lossy(&out.stdout);
+            return status.contains("Running");
         }
     }
     false
@@ -227,7 +280,7 @@ async fn is_vm_provisioned(vm_name: &str) -> bool {
         .args(["shell", "--workdir", "/tmp", vm_name])
         .arg("bash")
         .arg("-c")
-        .arg("test -f /var/log/opencode_provision.lock")
+        .arg("test -f $HOME/.muthr_provision.lock")
         .output()
         .await
         .ok();
@@ -462,7 +515,7 @@ pub async fn list() -> Result<(), color_eyre::Report> {
     if !is_tty {
         for vm in &vms {
             let status = Command::new("limactl")
-                .args(["ls", "-f", "'{{.Status}}'", vm])
+                .args(["ls", "-f", "{{.Status}}", vm])
                 .output()
                 .await
                 .ok()
@@ -484,7 +537,7 @@ pub async fn list() -> Result<(), color_eyre::Report> {
         let mut rows: Vec<Vec<String>> = Vec::new();
         for vm in &vms {
             let status = Command::new("limactl")
-                .args(["ls", "-f", "'{{.Status}}'", vm])
+                .args(["ls", "-f", "{{.Status}}", vm])
                 .output()
                 .await
                 .ok()

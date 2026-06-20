@@ -4,6 +4,23 @@ use std::path::{Path, PathBuf};
 
 use crate::preset::Preset;
 
+fn replace_placeholders_in_value(value: &mut Value, replacements: &[(&str, &str)]) {
+    match value {
+        Value::String(s) => {
+            for (from, to) in replacements {
+                *s = s.replace(from, to);
+            }
+        }
+        Value::Array(arr) => arr
+            .iter_mut()
+            .for_each(|v| replace_placeholders_in_value(v, replacements)),
+        Value::Object(map) => map
+            .values_mut()
+            .for_each(|v| replace_placeholders_in_value(v, replacements)),
+        _ => {}
+    }
+}
+
 pub fn generate_runtime_config(
     preset: &Preset,
     port: u16,
@@ -21,13 +38,20 @@ pub fn generate_runtime_config(
     let model_id = format!("01-{}", primary_slot.name);
     let ctx_window = primary_slot.ctx_size.unwrap_or(200000);
 
-    let content = content
-        .replace("__CTX_WINDOW__", &ctx_window.to_string())
-        .replace("__DEFAULT_MODEL__", &model_id)
-        .replace("__LLAMA_PORT__", &port.to_string())
-        .replace("__INJECTED_MOUNT_POINT__", &mount_point.to_string_lossy());
-
     let mut config: Value = serde_json::from_str(&content)?;
+
+    let ctx_str = ctx_window.to_string();
+    let port_str = port.to_string();
+    let mount_str = mount_point.to_string_lossy().into_owned();
+
+    let replacements: Vec<(&str, &str)> = vec![
+        ("__CTX_WINDOW__", ctx_str.as_str()),
+        ("__DEFAULT_MODEL__", model_id.as_str()),
+        ("__LLAMA_PORT__", port_str.as_str()),
+        ("__INJECTED_MOUNT_POINT__", mount_str.as_str()),
+    ];
+
+    replace_placeholders_in_value(&mut config, &replacements);
 
     if let Some(obj) = config.as_object_mut() {
         obj.insert(

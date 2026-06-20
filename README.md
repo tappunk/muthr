@@ -38,6 +38,9 @@ muthr down               # Stop the current sandbox
 muthr services start     # Launch MCP services VM
 muthr services status
 muthr services stop
+
+muthr boot               # Full stack startup: inference engine + MCP services VM
+muthr shutdown           # Graceful shutdown of all owned components
 ```
 
 ## Configuration
