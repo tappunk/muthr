@@ -481,36 +481,39 @@ pub fn list() -> Result<(), color_eyre::Report> {
     Ok(())
 }
 
-async fn apply_vram_limits(foreground: bool) {
+async fn apply_vram_limits(_foreground: bool) {
     let mem_bytes = sysctl_memsize().await;
     let threshold: u64 = 32 * 1024 * 1024 * 1024;
 
     if mem_bytes >= threshold {
         let gb = mem_bytes / 1024 / 1024 / 1024;
-        let wired_mb = (mem_bytes / 1024 / 1024) * 85 / 100;
-        let wired_mb = if wired_mb > 24576 { 24576 } else { wired_mb };
 
-        if !foreground {
-            println!(
-                "[INFO] High-memory host detected ({}GB). Wired Metal VRAM: {}MB (background mode — apply with --foreground to set now)",
-                gb, wired_mb
-            );
-            return;
-        }
+        // Scale limit aggressively for workstations (allocating up to 85% of physical memory)
+        let wired_mb = (mem_bytes / 1024 / 1024) * 85 / 100;
 
         println!(
-            "[INFO] High-memory host detected ({}GB). Adjusting wired Metal VRAM limits...",
-            gb
+            "[INFO] High-memory host detected ({}GB). Allocating optimized hardware VRAM limit: {}MB",
+            gb, wired_mb
         );
-        println!("[PROC] Adjusting Metal VRAM limits (requires sudo access)...");
-        let _ = AsyncCommand::new("sudo")
+        println!("[PROC] Tuning Metal performance limits (requires sudo validation)...");
+
+        // Execute sysctl write mapping directly. If run in the background (like muthr boot),
+        // macOS will gracefully prompt the active TTY layer for authentication.
+        let status = AsyncCommand::new("sudo")
             .args([
                 "sysctl",
                 "-w",
                 &format!("iogpu.wired_limit_mb={}", wired_mb),
             ])
-            .output()
+            .status()
             .await;
+
+        match status {
+            Ok(s) if s.success() => {
+                println!("[ OK ] Metal hardware scaling metrics applied successfully.")
+            }
+            _ => eprintln!("[WARN] Metal VRAM performance tuning declined or timed out."),
+        }
     }
 }
 
