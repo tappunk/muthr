@@ -16,7 +16,7 @@ pub enum ConfigCommands {
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct MuthrConfig {
-    pub port: Option<u16>,
+    pub server_port: Option<u16>,
     pub workspace_root: Option<String>,
     pub model_dir: Option<String>,
     pub default_provision_profile: Option<String>,
@@ -24,7 +24,7 @@ pub struct MuthrConfig {
 
 impl MuthrConfig {
     fn resolve(self) -> (u16, String, String, String) {
-        let port = self.port.unwrap_or(8080);
+        let server_port = self.server_port.unwrap_or(8080);
         let workspace_root = match self.workspace_root {
             Some(v) => v,
             None => std::env::var("HOME")
@@ -42,13 +42,13 @@ impl MuthrConfig {
         let provision_profile = self
             .default_provision_profile
             .unwrap_or_else(|| "base".to_string());
-        (port, workspace_root, model_dir, provision_profile)
+        (server_port, workspace_root, model_dir, provision_profile)
     }
 
     pub fn print_resolved(&self) {
-        let (port, workspace_root, model_dir, provision_profile) = self.clone().resolve();
+        let (server_port, workspace_root, model_dir, provision_profile) = self.clone().resolve();
         println!("muthr configuration:");
-        println!("  port:                          {}", port);
+        println!("  server_port:                   {}", server_port);
         println!("  workspace_root:                {}", workspace_root);
         println!("  model_dir:                     {}", model_dir);
         println!("  default_provision_profile:     {}", provision_profile);
@@ -66,8 +66,8 @@ pub fn load() -> Result<MuthrConfig, color_eyre::Report> {
         MuthrConfig::default()
     };
 
-    if let Ok(v) = std::env::var("MUTHR_PORT") {
-        config.port = v.parse().ok();
+    if let Ok(v) = std::env::var("MUTHR_SERVER_PORT") {
+        config.server_port = v.parse().ok();
     }
     if let Ok(v) = std::env::var("MUTHR_WORKSPACE_ROOT") {
         config.workspace_root = Some(v);
@@ -96,7 +96,7 @@ pub fn init_config(force: bool) -> Result<(), color_eyre::Report> {
     fs::create_dir_all(&config_dir)?;
 
     let template = r##"# muthr configuration
-port = 8080
+server_port = 8080
 workspace_root = "~/src"
 model_dir = "~/opt/models"
 default_provision_profile = "base"

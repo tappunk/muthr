@@ -13,7 +13,9 @@ pub async fn download(source: &str, file: Option<&str>) -> Result<(), color_eyre
         (repo, Some(file)) => (repo.to_string(), file.to_string()),
         _ => {
             eprintln!("[ERR ] Usage: muthr download <hf-repo> <filename> | <hf-url>");
-            eprintln!("  Example: muthr download unsloth/Qwen3.6-35B-A3B-GGUF Qwen3.6-35B-A3B-UD-Q4_K_M.gguf");
+            eprintln!(
+                "  Example: muthr download unsloth/Qwen3.6-35B-A3B-GGUF Qwen3.6-35B-A3B-UD-Q4_K_M.gguf"
+            );
             return Ok(());
         }
     };
@@ -31,6 +33,11 @@ pub async fn download(source: &str, file: Option<&str>) -> Result<(), color_eyre
             "~/opt/models".to_string()
         }
     });
+
+    let model_dir = model_dir
+        .strip_prefix("~/")
+        .map(|p| format!("{}/{}", std::env::var("HOME").unwrap_or_default(), p))
+        .unwrap_or(model_dir);
 
     let model_subdir = PathBuf::from(&model_dir).join(&repo);
     let target_path = model_subdir.join(&filename);

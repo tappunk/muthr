@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use tempfile::NamedTempFile;
@@ -10,6 +10,7 @@ pub async fn run(action: crate::ServicesCommands) -> Result<(), color_eyre::Repo
         crate::ServicesCommands::Stop => stop().await?,
         crate::ServicesCommands::Status => status().await?,
         crate::ServicesCommands::Restart => restart().await?,
+        crate::ServicesCommands::Delete { force } => delete(force).await?,
     }
     Ok(())
 }
@@ -48,8 +49,7 @@ pub async fn start() -> Result<(), color_eyre::Report> {
             }
 
             let start_status = Command::new("limactl")
-                .arg("start")
-                .arg(vm_name)
+                .args(["start", vm_name])
                 .stdout(Stdio::inherit())
                 .stderr(Stdio::inherit())
                 .status()?;
@@ -62,8 +62,7 @@ pub async fn start() -> Result<(), color_eyre::Report> {
         } else {
             println!("[PROC] Starting existing VM...");
             let status = Command::new("limactl")
-                .arg("start")
-                .arg(vm_name)
+                .args(["start", vm_name])
                 .stdout(Stdio::inherit())
                 .stderr(Stdio::inherit())
                 .status()?;
@@ -233,4 +232,50 @@ fn is_vm_provisioned(vm_name: &str) -> bool {
         Some(out) => out.status.success(),
         None => false,
     }
+}
+
+pub async fn delete(force: bool) -> Result<(), color_eyre::Report> {
+    let vm_name = "muthr-services";
+
+    if !is_vm_exists(vm_name) {
+        println!("[WARN] MCP VM '{}' does not exist", vm_name);
+        return Ok(());
+    }
+
+    if !force && !std::io::stdout().is_terminal() {
+        eprintln!("Error: terminal required for deletion. Use --force to skip confirmation.");
+        std::process::exit(1);
+    }
+
+    println!("[PROC] Deleting MCP services VM '{}'...", vm_name);
+
+    let unprotect_status = Command::new("limactl")
+        .args(["unprotect", vm_name])
+        .output()?;
+    if !unprotect_status.status.success() {
+        eprintln!("[WARN] Failed to unprotect VM '{}'.", vm_name);
+    }
+
+    if is_vm_running(vm_name) {
+        println!("[PROC] Stopping MCP services VM...");
+        let stop_output = Command::new("limactl").arg("stop").arg(vm_name).output()?;
+        if !stop_output.status.success() {
+            eprintln!("[WARN] Failed to stop VM '{}'.", vm_name);
+        }
+    }
+
+    let delete_status = Command::new("limactl").args(["delete", vm_name]).output()?;
+
+    if !delete_status.status.success() {
+        return Err(color_eyre::eyre::eyre!("Failed to delete MCP services VM"));
+    }
+
+    let home = std::env::var("HOME")?;
+    let cache_file = PathBuf::from(&home).join(".cache/muthr/services-profiles");
+    if cache_file.exists() {
+        fs::remove_file(&cache_file)?;
+    }
+
+    println!("[ OK ] MCP services VM deleted and cache cleaned.");
+    Ok(())
 }

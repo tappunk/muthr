@@ -20,40 +20,43 @@ fn physical_cpu_count() -> u32 {
     let output = std::process::Command::new("sysctl")
         .args(["-n", "hw.perflevel0.physicalcpu"])
         .output();
-    if let Ok(out) = output {
-        if out.status.success() {
+    match output {
+        Ok(ref out) if out.status.success() => {
             let raw = String::from_utf8_lossy(&out.stdout);
             let digits: String = raw.chars().filter(|c| c.is_ascii_digit()).collect();
             if let Ok(count) = digits.parse::<u32>() {
                 return count;
             }
         }
+        _ => {}
     }
 
     let output = std::process::Command::new("sysctl")
         .args(["-n", "hw.physicalcpu"])
         .output();
-    if let Ok(out) = output {
-        if out.status.success() {
+    match output {
+        Ok(ref out) if out.status.success() => {
             let raw = String::from_utf8_lossy(&out.stdout);
             let digits: String = raw.chars().filter(|c| c.is_ascii_digit()).collect();
             if let Ok(count) = digits.parse::<u32>() {
                 return count;
             }
         }
+        _ => {}
     }
 
     let output = std::process::Command::new("sysctl")
-        .args(["-n", "hw.logicalcpu"])
+        .args(["-n", "hw.physicalcpu"])
         .output();
-    if let Ok(out) = output {
-        if out.status.success() {
+    match output {
+        Ok(ref out) if out.status.success() => {
             let raw = String::from_utf8_lossy(&out.stdout);
             let digits: String = raw.chars().filter(|c| c.is_ascii_digit()).collect();
             if let Ok(count) = digits.parse::<u32>() {
                 return count;
             }
         }
+        _ => {}
     }
 
     std::thread::available_parallelism()
@@ -176,19 +179,21 @@ pub async fn serve(
     let pid_file = cache_dir.join("llama-server.pid");
 
     if !foreground && pid_file.exists() {
-        if let Ok(pid_bytes) = fs::read_to_string(&pid_file).await {
-            if let Ok(old_pid) = pid_bytes.trim().parse::<u32>() {
-                if is_llama_server_pid(old_pid).await {
-                    eprintln!(
-                        "[WARN] Server already running (PID {}). Stopping first.",
-                        old_pid
-                    );
-                    let _ = stop().await;
-                    fs::remove_file(&pid_file).await.ok();
-                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                } else {
-                    fs::remove_file(&pid_file).await.ok();
-                }
+        let stale = || async { fs::remove_file(&pid_file).await.ok() };
+
+        if let Ok(pid_bytes) = fs::read_to_string(&pid_file).await
+            && let Ok(old_pid) = pid_bytes.trim().parse::<u32>()
+        {
+            if is_llama_server_pid(old_pid).await {
+                eprintln!(
+                    "[WARN] Server already running (PID {}). Stopping first.",
+                    old_pid
+                );
+                let _ = stop().await;
+                fs::remove_file(&pid_file).await.ok();
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            } else {
+                stale().await;
             }
         }
     }

@@ -50,14 +50,13 @@ pub async fn poll_loaded_model(
     let url = format!("http://{}:{}/v1/models", host, port);
 
     for i in 1..=max_retries {
-        if let Ok(response) = client.get(&url).send().await {
-            if let Ok(json) = response.json::<serde_json::Value>().await {
-                if let Some(data) = json.get("data").and_then(|d| d.as_array()) {
-                    for item in data {
-                        if let Some(id) = item.get("id") {
-                            return Ok(id.as_str().unwrap_or("").to_string());
-                        }
-                    }
+        if let Ok(response) = client.get(&url).send().await
+            && let Ok(json) = response.json::<serde_json::Value>().await
+            && let Some(data) = json.get("data").and_then(|d| d.as_array())
+        {
+            for item in data {
+                if let Some(id) = item.get("id") {
+                    return Ok(id.as_str().unwrap_or("").to_string());
                 }
             }
         }

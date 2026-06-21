@@ -208,20 +208,16 @@ pub fn resolve_preset(name: &str) -> Option<PathBuf> {
     let home = std::env::var("HOME").ok()?;
     let path =
         PathBuf::from(&home).join(format!(".config/muthr/provider.d/llama-cpp/{}.ini", name));
-    if path.exists() {
-        Some(path)
-    } else {
-        None
-    }
+    if path.exists() { Some(path) } else { None }
 }
 
 pub fn expand_home(path: &Path) -> PathBuf {
-    if path.starts_with("~") {
-        if let Ok(home) = std::env::var("HOME") {
-            let mut pb = PathBuf::from(home);
-            if let Ok(stripped) = path.strip_prefix("~") {
-                pb.push(stripped);
-            }
+    if path.starts_with("~")
+        && let Ok(home) = std::env::var("HOME")
+    {
+        let mut pb = PathBuf::from(home);
+        if let Ok(stripped) = path.strip_prefix("~") {
+            pb.push(stripped);
             return pb;
         }
     }

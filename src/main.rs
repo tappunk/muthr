@@ -1,21 +1,20 @@
+pub mod catalog;
 pub mod config;
 pub mod download;
 pub mod engine;
 pub mod init;
 pub mod model;
 pub mod preset;
-pub mod runtime_config;
 pub mod sandbox;
 pub mod services;
 pub mod shutdown;
 pub mod ui;
 
 use clap::{CommandFactory, Parser, Subcommand};
-use clap_complete::{generate, Shell};
+use clap_complete::{Shell, generate};
 use tokio::process::Command as AsyncCommand;
 
 use crate::config::ConfigCommands;
-use crate::sandbox::ProvisionProfile;
 
 #[derive(Parser)]
 #[command(
@@ -39,11 +38,10 @@ enum Commands {
         #[arg(long, help = "Name of the target preset profile to load")]
         profile: Option<String>,
         #[arg(
-            short,
             long,
             help = "Port to bind the inference engine server (default from muthr.toml or 8080)"
         )]
-        port: Option<u16>,
+        engine_server_port: Option<u16>,
         #[arg(
             long,
             help = "Run in foreground (blocking mode) instead of as a background daemon"
@@ -63,21 +61,20 @@ enum Commands {
     #[command(about = "Provision and start a Lima sandbox VM for the current project")]
     Up {
         #[arg(
-            short,
             long,
-            help = "Port where the inference engine is reachable (default from muthr.toml or 8080)"
+            help = "Profile to apply (base, opencode, hermes-agent; listed from provision.d/)"
         )]
-        port: Option<u16>,
-        #[arg(
-            long,
-            value_enum,
-            help = "Provisioning profile to apply (base = minimal, opencode = full toolchain; default from muthr.toml or base)"
-        )]
-        provision_profile: Option<ProvisionProfile>,
+        profile: Option<String>,
     },
 
     #[command(about = "Stop the active project sandbox VM")]
     Down,
+
+    #[command(about = "Delete the active project sandbox VM")]
+    Delete {
+        #[arg(long, help = "Skip confirmation prompt")]
+        force: bool,
+    },
 
     #[command(about = "List all managed sandbox VMs")]
     Ls,
@@ -156,6 +153,11 @@ pub enum ServicesCommands {
     Status,
     #[command(about = "Restart the MCP services VM execution context")]
     Restart,
+    #[command(about = "Delete the MCP services VM")]
+    Delete {
+        #[arg(long, help = "Skip confirmation prompt")]
+        force: bool,
+    },
 }
 
 #[tokio::main]
@@ -172,7 +174,7 @@ async fn boot(verbose: bool) -> Result<(), color_eyre::Report> {
             println!("[PROC] Starting inference engine...");
         }
         let cfg = config::load()?;
-        let server_port = cfg.port.unwrap_or(8080);
+        let server_port = cfg.server_port.unwrap_or(8080);
         engine::serve(None, server_port, false).await?;
     }
 
@@ -209,67 +211,89 @@ async fn run() -> Result<(), color_eyre::Report> {
         None => engine::status().await?,
         Some(Commands::Serve {
             profile,
-            port,
+            engine_server_port,
             foreground,
         }) => {
             let cfg = config::load()?;
-            let server_port = port.unwrap_or(cfg.port.unwrap_or(8080));
+            let server_port = engine_server_port.unwrap_or(cfg.server_port.unwrap_or(8080));
             engine::serve(profile, server_port, foreground).await?
         }
         Some(Commands::Status) => engine::status().await?,
         Some(Commands::Stop) => engine::stop().await?,
         Some(Commands::List) => engine::list()?,
-        Some(Commands::Up {
-            port,
-            provision_profile,
-        }) => {
-            let cfg = config::load()?;
-            let up_port = port.unwrap_or(cfg.port.unwrap_or(8080));
+        Some(Commands::Up { profile }) => {
+            let home = std::env::var("HOME")?;
+            let config_dir = std::path::PathBuf::from(&home).join(".config/muthr");
+
+            let profiles = catalog::list_profiles(&config_dir)?;
+            let all_profiles: Vec<&str> = std::iter::once("base")
+                .chain(profiles.iter().map(|p| p.name.as_str()))
+                .collect();
 
             let (vm_name, _, _) = sandbox::resolve_workspace_context()?;
+            let vm_exists = !vm_name.is_empty() && sandbox::vm_exists(&vm_name).await;
 
-            let sandbox_exists = if !vm_name.is_empty() {
-                sandbox::vm_exists(&vm_name).await
-            } else {
-                false
-            };
+            let profile_name = match profile {
+                Some(p) => p,
+                None if vm_exists => {
+                    println!(
+                        "[INFO] Sandbox '{}' already exists — launching session.",
+                        vm_name
+                    );
+                    "base".to_string()
+                }
+                None => {
+                    println!("Select a provisioning profile:");
+                    let mut items: Vec<String> = Vec::new();
+                    for name in &all_profiles {
+                        let desc = match *name {
+                            "base" => "Minimal VM — drops into shell",
+                            "opencode" => "Opencode AI — fully configured with MCP services",
+                            "hermes-agent" => "Hermes Agent — drops into shell after install",
+                            _ => "",
+                        };
+                        items.push(format!("  {}) {:<15} {}", items.len() + 1, name, desc));
+                    }
+                    println!();
+                    for item in &items {
+                        println!("{}", item);
+                    }
+                    print!("\nEnter choice ({}-{}) or q to quit: ", 1, items.len());
+                    std::io::Write::flush(&mut std::io::stdout()).ok();
 
-            let up_profile = match (provision_profile, cfg.default_provision_profile.as_deref()) {
-                (Some(p), _) => p,
-                (None, Some("opencode")) => ProvisionProfile::Opencode,
-                (None, None) => {
-                    if sandbox_exists {
-                        println!(
-                            "[INFO] Sandbox '{}' already exists — skipping provision prompt.",
-                            vm_name
-                        );
-                        ProvisionProfile::Base
-                    } else {
-                        let options = vec![
-                            crate::ui::ProvisionOption {
-                                label: "base",
-                                description: "Minimal VM provision — no extra tools installed",
-                            },
-                            crate::ui::ProvisionOption {
-                                label: "opencode",
-                                description: "Full toolchain with opencode binary and MCP support",
-                            },
-                        ];
-                        match ui::select_provision_profile(&options) {
-                            Some(0) => ProvisionProfile::Base,
-                            Some(1) => ProvisionProfile::Opencode,
-                            _ => {
-                                println!("[INFO] Cancelled.");
-                                return Ok(());
-                            }
+                    let mut input = String::new();
+                    std::io::stdin().read_line(&mut input).ok();
+                    let trimmed = input.trim();
+
+                    if trimmed == "q" || trimmed.is_empty() {
+                        println!("[INFO] Cancelled.");
+                        return Ok(());
+                    }
+
+                    match trimmed.parse::<usize>() {
+                        Ok(n) if n > 0 && n <= items.len() => {
+                            let idx = n - 1;
+                            all_profiles[idx].to_string()
+                        }
+                        _ => {
+                            println!("[INFO] Invalid selection.");
+                            return Ok(());
                         }
                     }
                 }
-                _ => ProvisionProfile::Base,
             };
-            sandbox::up(up_port, up_profile).await?
+
+            sandbox::up(profile_name).await?
         }
         Some(Commands::Down) => sandbox::down().await?,
+        Some(Commands::Delete { force }) => {
+            let (vm_name, _, _) = sandbox::resolve_workspace_context()?;
+            if vm_name.is_empty() || vm_name == "muthr-config" {
+                eprintln!("Error: must be inside a project directory.");
+                std::process::exit(1);
+            }
+            sandbox::delete_vm(&vm_name, force).await?
+        }
         Some(Commands::Ls) => sandbox::list().await?,
         Some(Commands::Services { action }) => services::run(action).await?,
         Some(Commands::Boot { verbose }) => boot(verbose).await?,
