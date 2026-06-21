@@ -23,16 +23,17 @@ macOS (Apple Silicon, ≥48GB RAM for 35B models), [Lima](https://github.com/lim
 ## Usage
 
 ```bash
+muthr                    # Show system status dashboard (default)
+muthr --help             # List all subcommands
 muthr init               # Clone specs from tappunk/muthr-specs
 muthr download <source>  # Fetch GGUF model from HuggingFace
 
 muthr serve              # Start llama-server as a background daemon
 muthr serve --foreground # Run in foreground
-muthr status             # Check engine status and active profile
 muthr stop               # Stop the engine
 
 muthr up                 # Provision a Debian 13 VM for the current project
-muthr ls                 # List all active sandboxes
+muthr ls                 # List all managed sandbox VMs
 muthr down               # Stop the current sandbox
 
 muthr services start     # Launch MCP services VM

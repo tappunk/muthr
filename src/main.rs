@@ -8,7 +8,6 @@ pub mod runtime_config;
 pub mod sandbox;
 pub mod services;
 pub mod shutdown;
-pub mod theme;
 pub mod ui;
 
 use clap::{CommandFactory, Parser, Subcommand};
@@ -25,12 +24,12 @@ use crate::sandbox::ProvisionProfile;
     author,
     about = "Manage llama.cpp inference and Lima sandbox VMs for local AI development.",
     long_about = "muthr automates llama.cpp on macOS for local inference and manages isolated Lima sandbox VMs for running AI agents with safe access to your workspace.\n\nPrerequisites: macOS (Apple Silicon), Lima VM, and llama.cpp",
-    arg_required_else_help = true,
+    arg_required_else_help = false,
     propagate_version = true
 )]
 struct Cli {
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
@@ -55,7 +54,7 @@ enum Commands {
     #[command(about = "Stop the background llama-server daemon")]
     Stop,
 
-    #[command(about = "Show the active profile and server status")]
+    #[command(about = "Show system status (default)")]
     Status,
 
     #[command(about = "List available preset profiles")]
@@ -125,9 +124,6 @@ enum Commands {
         )]
         shell: Shell,
     },
-
-    #[command(about = "Browse and select Ghostty terminal themes")]
-    Themes,
 
     #[command(about = "Initialize muthr configurations from the upstream repository")]
     Init {
@@ -210,44 +206,62 @@ async fn run() -> Result<(), color_eyre::Report> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Serve {
+        None => engine::status().await?,
+        Some(Commands::Serve {
             profile,
             port,
             foreground,
-        } => {
+        }) => {
             let cfg = config::load()?;
             let server_port = port.unwrap_or(cfg.port.unwrap_or(8080));
             engine::serve(profile, server_port, foreground).await?
         }
-        Commands::Status => engine::status().await?,
-        Commands::Stop => engine::stop().await?,
-        Commands::List => engine::list()?,
-        Commands::Up {
+        Some(Commands::Status) => engine::status().await?,
+        Some(Commands::Stop) => engine::stop().await?,
+        Some(Commands::List) => engine::list()?,
+        Some(Commands::Up {
             port,
             provision_profile,
-        } => {
+        }) => {
             let cfg = config::load()?;
             let up_port = port.unwrap_or(cfg.port.unwrap_or(8080));
+
+            let (vm_name, _, _) = sandbox::resolve_workspace_context()?;
+
+            let sandbox_exists = if !vm_name.is_empty() {
+                sandbox::vm_exists(&vm_name).await
+            } else {
+                false
+            };
+
             let up_profile = match (provision_profile, cfg.default_provision_profile.as_deref()) {
                 (Some(p), _) => p,
                 (None, Some("opencode")) => ProvisionProfile::Opencode,
                 (None, None) => {
-                    let options = vec![
-                        crate::ui::ProvisionOption {
-                            label: "base",
-                            description: "Minimal VM provision — no extra tools installed",
-                        },
-                        crate::ui::ProvisionOption {
-                            label: "opencode",
-                            description: "Full toolchain with opencode binary and MCP support",
-                        },
-                    ];
-                    match ui::select_provision_profile(&options) {
-                        Some(0) => ProvisionProfile::Base,
-                        Some(1) => ProvisionProfile::Opencode,
-                        _ => {
-                            println!("[INFO] Cancelled.");
-                            return Ok(());
+                    if sandbox_exists {
+                        println!(
+                            "[INFO] Sandbox '{}' already exists — skipping provision prompt.",
+                            vm_name
+                        );
+                        ProvisionProfile::Base
+                    } else {
+                        let options = vec![
+                            crate::ui::ProvisionOption {
+                                label: "base",
+                                description: "Minimal VM provision — no extra tools installed",
+                            },
+                            crate::ui::ProvisionOption {
+                                label: "opencode",
+                                description: "Full toolchain with opencode binary and MCP support",
+                            },
+                        ];
+                        match ui::select_provision_profile(&options) {
+                            Some(0) => ProvisionProfile::Base,
+                            Some(1) => ProvisionProfile::Opencode,
+                            _ => {
+                                println!("[INFO] Cancelled.");
+                                return Ok(());
+                            }
                         }
                     }
                 }
@@ -255,24 +269,27 @@ async fn run() -> Result<(), color_eyre::Report> {
             };
             sandbox::up(up_port, up_profile).await?
         }
-        Commands::Down => sandbox::down().await?,
-        Commands::Ls => sandbox::list().await?,
-        Commands::Services { action } => services::run(action).await?,
-        Commands::Boot { verbose } => boot(verbose).await?,
-        Commands::Shutdown { verbose, timeout } => {
+        Some(Commands::Down) => sandbox::down().await?,
+        Some(Commands::Ls) => sandbox::list().await?,
+        Some(Commands::Services { action }) => services::run(action).await?,
+        Some(Commands::Boot { verbose }) => boot(verbose).await?,
+        Some(Commands::Shutdown { verbose, timeout }) => {
             shutdown::run(verbose, timeout).await;
         }
-        Commands::Download { source, file } => download::download(&source, file.as_deref()).await?,
-        Commands::Themes => theme::run()?,
-        Commands::Init { git_url, force } => init::run(init::InitCommands { git_url, force })?,
-        Commands::Config { action } => match action {
+        Some(Commands::Download { source, file }) => {
+            download::download(&source, file.as_deref()).await?
+        }
+        Some(Commands::Init { git_url, force }) => {
+            init::run(init::InitCommands { git_url, force })?
+        }
+        Some(Commands::Config { action }) => match action {
             ConfigCommands::Init { force } => config::init_config(force)?,
             ConfigCommands::Show => {
                 let cfg = config::load()?;
                 cfg.print_resolved();
             }
         },
-        Commands::Completion { shell } => {
+        Some(Commands::Completion { shell }) => {
             let mut cmd = Cli::command();
             generate(shell, &mut cmd, "muthr", &mut std::io::stdout());
         }

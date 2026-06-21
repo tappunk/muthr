@@ -32,6 +32,12 @@ if [[ ! "$BUMP" =~ ^(patch|minor|major)$ ]]; then
   exit 1
 fi
 
+if [[ -n $(git ls-files --others --exclude-standard) ]]; then
+  echo "[ERR] Untracked files found in workspace. Add or remove them before releasing."
+  git ls-files --others --exclude-standard
+  exit 1
+fi
+
 if [[ -n $(git status --porcelain) ]]; then
   echo "[ERR] Uncommitted changes detected. Stash or commit before releasing."
   exit 1
@@ -96,7 +102,9 @@ rollback() {
   if git rev-parse "v$NEW_VERSION" >/dev/null 2>&1; then
     git tag -d "v$NEW_VERSION"
   fi
-  echo "[WARN] Local repo left intact. Review staged changes manually."
+  git checkout -- Cargo.toml flake.nix 2>/dev/null || true
+  rm -f "$ARCHIVE_NAME" "$CHECKSUM_NAME" 2>/dev/null || true
+  echo "[WARN] Rolled back. Re-run release.sh to try again."
 }
 trap rollback ERR
 

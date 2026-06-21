@@ -1,10 +1,12 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub struct InitCommands {
     pub git_url: Option<String>,
     pub force: bool,
 }
+
+const MANAGED_DIRS: &[&str] = &["clients", "manifests", "provider.d", "provision.d"];
 
 pub fn run(cmd: InitCommands) -> Result<(), color_eyre::Report> {
     let config_dir = get_config_dir()?;
@@ -60,13 +62,24 @@ pub fn run(cmd: InitCommands) -> Result<(), color_eyre::Report> {
         std::process::exit(1);
     }
 
-    if cmd.force && config_dir.exists() {
-        println!("[INIT] Removing existing config directory...");
-        remove_dir_all(&config_dir)?;
+    if let Some(parent) = config_dir.parent() {
+        std::fs::create_dir_all(parent)?;
     }
 
-    std::fs::rename(&tmp_dir, &config_dir)
-        .map_err(|e| color_eyre::eyre::eyre!("Failed to install configs: {}", e))?;
+    if cmd.force && config_dir.exists() {
+        sync_managed_dirs(&tmp_dir, &config_dir)?;
+    } else {
+        std::fs::rename(&tmp_dir, &config_dir)
+            .map_err(|e| color_eyre::eyre::eyre!("Failed to install configs: {}", e))?;
+    }
+
+    let home = std::env::var("HOME").ok();
+    if let Some(home) = home {
+        let muthr_toml = PathBuf::from(&home).join(".config/muthr/muthr.toml");
+        if !muthr_toml.exists() {
+            crate::config::init_config(false)?;
+        }
+    }
 
     println!("[OK] muthr configs installed successfully.");
     println!();
@@ -75,6 +88,23 @@ pub fn run(cmd: InitCommands) -> Result<(), color_eyre::Report> {
     println!("  muthr serve — start llama-server engine context daemon");
     println!("  muthr up    — full isolated development VM workflow container spin-up");
 
+    Ok(())
+}
+
+fn sync_managed_dirs(src: &Path, dst: &Path) -> Result<(), color_eyre::Report> {
+    for dir_name in MANAGED_DIRS {
+        let src_path = src.join(dir_name);
+        let dst_path = dst.join(dir_name);
+
+        if src_path.exists() {
+            if dst_path.exists() {
+                println!("[INIT] Updating {}...", dir_name);
+                remove_dir_all(&dst_path)?;
+            }
+            std::fs::rename(&src_path, &dst_path)
+                .map_err(|e| color_eyre::eyre::eyre!("Failed to sync {}: {}", dir_name, e))?;
+        }
+    }
     Ok(())
 }
 

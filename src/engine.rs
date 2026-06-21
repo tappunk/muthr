@@ -85,7 +85,16 @@ async fn is_llama_server_pid(pid: u32) -> bool {
         let ps_output = String::from_utf8_lossy(&out.stdout);
         for line in ps_output.lines() {
             let trimmed = line.trim();
-            if trimmed.contains("llama-server") {
+            let parts: Vec<&str> = trimmed.splitn(2, ' ').collect();
+            if parts.len() < 2 {
+                continue;
+            }
+            let comm = parts[0].trim();
+            if comm != "llama-server" {
+                continue;
+            }
+            let args = parts[1];
+            if args.contains("--model") || args.contains("--host") {
                 return true;
             }
         }
@@ -390,13 +399,7 @@ pub async fn stop() -> Result<(), color_eyre::Report> {
 
 pub async fn status() -> Result<(), color_eyre::Report> {
     let home = std::env::var("HOME")?;
-    let active_path = PathBuf::from(&home).join(".cache/muthr/active-preset.ini");
     let name_path = PathBuf::from(&home).join(".cache/muthr/active-preset-name");
-
-    if !active_path.exists() {
-        println!("[STATUS] No active profile configured.");
-        return Ok(());
-    }
 
     let preset_name = fs::read_to_string(&name_path)
         .await
@@ -404,25 +407,7 @@ pub async fn status() -> Result<(), color_eyre::Report> {
         .map(|s| s.trim().to_string())
         .unwrap_or_default();
 
-    let preset = if !preset_name.is_empty() {
-        preset::resolve_preset(&preset_name).and_then(|p| preset::parse_preset(&p).ok())
-    } else {
-        None
-    };
-
-    let preset_basename = preset
-        .as_ref()
-        .map(|p| p.name.clone())
-        .unwrap_or_else(|| "unknown".to_string());
-
-    println!("[STATUS] Active profile: {}", preset_basename);
-    if let Some(p) = &preset {
-        println!("   Preset:     {}", p.path.display());
-    } else {
-        println!("   Preset:     (not found on disk)");
-    }
-
-    let is_running = AsyncCommand::new("pgrep")
+    let is_server_running = AsyncCommand::new("pgrep")
         .arg("-x")
         .arg("llama-server")
         .output()
@@ -430,10 +415,109 @@ pub async fn status() -> Result<(), color_eyre::Report> {
         .status
         .success();
 
-    if is_running {
-        println!("   Server:     running");
+    if preset_name.is_empty() {
+        println!("● muthr — not configured");
+    } else if is_server_running {
+        println!("● muthr is running");
     } else {
-        println!("   Server:     stopped");
+        println!("● muthr — configured, server stopped");
+    }
+
+    if preset_name.is_empty() {
+        println!("    Inference Engine   (none)");
+    } else {
+        let preset =
+            preset::resolve_preset(&preset_name).and_then(|p| preset::parse_preset(&p).ok());
+        let profile_label = preset
+            .as_ref()
+            .map(|p| p.name.as_str())
+            .unwrap_or_else(|| preset_name.as_str());
+        println!("    Inference Engine   active      {}", profile_label);
+    }
+
+    if is_server_running {
+        println!("    Server             running");
+    } else {
+        println!("    Server             stopped");
+    }
+
+    let services_vm = "muthr-services";
+    let services_output = AsyncCommand::new("limactl")
+        .args(["ls", "-f", "{{.Status}}", services_vm])
+        .output()
+        .await
+        .ok();
+
+    let services_status = match services_output {
+        Some(out) if out.status.success() => {
+            let raw = String::from_utf8_lossy(&out.stdout);
+            if raw.contains("Running") {
+                Some("running")
+            } else {
+                Some("stopped")
+            }
+        }
+        _ => None,
+    };
+
+    if let Some(status) = services_status {
+        println!("    VM Cluster         {}     {}", services_vm, status);
+
+        let provision_output = AsyncCommand::new("limactl")
+            .args([
+                "shell",
+                services_vm,
+                "bash",
+                "-c",
+                "test -f $HOME/mcp-stdio.sh && test -f $HOME/.local/lib/node_modules/mcp-searxng/dist/cli.js",
+            ])
+            .output()
+            .await
+            .ok();
+
+        match provision_output {
+            Some(out) if out.status.success() => {
+                println!("    MCP Services       provisioned");
+            }
+            _ => {
+                println!("    MCP Services       not provisioned");
+            }
+        }
+    }
+
+    let sandbox_output = AsyncCommand::new("limactl")
+        .args(["ls", "-f", "{{.Name}} {{.Status}}"])
+        .output()
+        .await;
+
+    if let Ok(ref out) = sandbox_output {
+        let stdout_str = String::from_utf8_lossy(&out.stdout);
+        let mut active_sandboxes: Vec<(String, String)> = Vec::new();
+
+        for line in stdout_str.lines() {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 2 {
+                let vm_name = parts[0];
+                let vm_status = parts[1];
+
+                if vm_name.starts_with("muthr-") && vm_name != "muthr-services" {
+                    let project_token = vm_name.strip_prefix("muthr-").unwrap_or(vm_name);
+                    active_sandboxes.push((project_token.to_string(), vm_status.to_string()));
+                }
+            }
+        }
+
+        if !active_sandboxes.is_empty() {
+            println!("    Sandboxes");
+            for (i, (token, status)) in active_sandboxes.iter().enumerate() {
+                let connector = if i + 1 == active_sandboxes.len() {
+                    "      └─"
+                } else {
+                    "      ├─"
+                };
+                println!("{} {:<20} {}", connector, token, status);
+            }
+        }
     }
 
     Ok(())
@@ -488,7 +572,6 @@ async fn apply_vram_limits(_foreground: bool) {
     if mem_bytes >= threshold {
         let gb = mem_bytes / 1024 / 1024 / 1024;
 
-        // Scale limit aggressively for workstations (allocating up to 85% of physical memory)
         let wired_mb = (mem_bytes / 1024 / 1024) * 85 / 100;
 
         println!(
@@ -497,14 +580,26 @@ async fn apply_vram_limits(_foreground: bool) {
         );
         println!("[PROC] Tuning Metal performance limits (requires sudo validation)...");
 
-        // Execute sysctl write mapping directly. If run in the background (like muthr boot),
-        // macOS will gracefully prompt the active TTY layer for authentication.
+        let tty = match std::fs::File::open("/dev/tty") {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!(
+                    "[WARN] Cannot open /dev/tty for sudo: {} — VRAM tuning skipped",
+                    e
+                );
+                return;
+            }
+        };
+
         let status = AsyncCommand::new("sudo")
             .args([
                 "sysctl",
                 "-w",
                 &format!("iogpu.wired_limit_mb={}", wired_mb),
             ])
+            .stdin(tty.try_clone().unwrap())
+            .stdout(tty.try_clone().unwrap())
+            .stderr(tty)
             .status()
             .await;
 

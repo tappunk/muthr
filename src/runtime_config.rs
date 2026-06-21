@@ -35,7 +35,7 @@ pub fn generate_runtime_config(
         .first()
         .ok_or_else(|| color_eyre::eyre::eyre!("No slots found in preset"))?;
 
-    let model_id = format!("01-{}", primary_slot.name);
+    let model_id = primary_slot.name.clone();
     let ctx_window = primary_slot.ctx_size.unwrap_or(200000);
     let ctx_str = ctx_window.to_string();
 
