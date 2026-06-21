@@ -31,24 +31,31 @@ muthr download <source>  # Fetch GGUF model from HuggingFace
 muthr serve              # Start llama-server as a background daemon
 muthr serve --foreground # Run in foreground
 muthr stop               # Stop the engine
+muthr list               # List available preset profiles
 
 muthr up                 # Provision a Debian 13 VM for the current project
 muthr ls                 # List all managed sandbox VMs
 muthr down               # Stop the current sandbox
+muthr delete             # Delete the active sandbox VM
 
 muthr services start     # Launch MCP services VM
 muthr services status
 muthr services stop
+muthr services restart   # Restart the MCP services VM
+muthr services delete    # Delete the MCP services VM
 
 muthr boot               # Full stack startup: inference engine + MCP services VM
 muthr shutdown           # Graceful shutdown of all owned components
+
+muthr config init        # Create muthr.toml config file
+muthr config show        # Show resolved configuration
 ```
 
 ## Configuration
 
 Config in `~/.config/muthr/` (see [muthr-specs](https://github.com/tappunk/muthr-specs) for the full directory structure and examples):
 
-- `provider.d/llama-cpp/*.ini` — preset profiles (context sizes, threading, model paths)
+- `provider.d/llama-cpp/*.ini` — presets (context sizes, threading, model paths)
 - `clients/opencode-config.json` — template for OpenCode runtime config generation
 - `manifests/*.yaml` — VM architecture, memory, container configs
 - `provision.d/*.sh` — boot scripts for OpenCode CLI and dependencies
