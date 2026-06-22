@@ -841,7 +841,7 @@ dependencies = [
 
 [[package]]
 name = "muthr"
-version = "0.1.32"
+version = "0.1.33"
 dependencies = [
  "clap",
  "clap_complete",
