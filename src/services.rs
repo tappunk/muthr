@@ -16,19 +16,17 @@ pub async fn run(action: crate::ServicesCommands) -> Result<(), color_eyre::Repo
 }
 
 pub async fn start() -> Result<(), color_eyre::Report> {
-    println!("[PROC] Starting MCP VM...");
-
     let vm_name = "muthr-services";
     let home = std::env::var("HOME")?;
     let template_path = PathBuf::from(&home).join(".config/muthr/manifests/mcp-services.yaml");
 
     if !is_vm_running(vm_name) {
         if !is_vm_exists(vm_name) {
-            println!("[PROC] Creating new MCP VM...");
+            println!("creating mcp-services VM");
 
             if !template_path.exists() {
                 return Err(color_eyre::eyre::eyre!(
-                    "Template not found: {:?}",
+                    "template not found: {:?}",
                     template_path
                 ));
             }
@@ -45,7 +43,7 @@ pub async fn start() -> Result<(), color_eyre::Report> {
                 .status()?;
 
             if !create_status.success() {
-                return Err(color_eyre::eyre::eyre!("Failed to create MCP VM"));
+                return Err(color_eyre::eyre::eyre!("failed to create MCP VM"));
             }
 
             let start_status = Command::new("limactl")
@@ -55,12 +53,10 @@ pub async fn start() -> Result<(), color_eyre::Report> {
                 .status()?;
 
             if !start_status.success() {
-                return Err(color_eyre::eyre::eyre!("Failed to start MCP VM"));
+                return Err(color_eyre::eyre::eyre!("failed to start MCP VM"));
             }
-
-            println!("[ OK ] VM created and started.");
         } else {
-            println!("[PROC] Starting existing VM...");
+            println!("starting mcp-services VM");
             let status = Command::new("limactl")
                 .args(["start", vm_name])
                 .stdout(Stdio::inherit())
@@ -68,20 +64,17 @@ pub async fn start() -> Result<(), color_eyre::Report> {
                 .status()?;
 
             if !status.success() {
-                return Err(color_eyre::eyre::eyre!("Failed to start MCP VM"));
+                return Err(color_eyre::eyre::eyre!("failed to start MCP VM"));
             }
-
-            println!("[ OK ] VM started.");
         }
     } else {
-        println!("[ OK ] MCP VM already running");
+        println!("mcp-services VM already running");
         return Ok(());
     }
 
     if is_vm_provisioned(vm_name) {
-        println!("[ OK ] MCP VM already provisioned.");
+        // nothing - already provisioned
     } else {
-        println!("[PROC] Transporting provisioning assets to guest environment...");
         let cp_status = Command::new("limactl")
             .args([
                 "cp",
@@ -92,11 +85,10 @@ pub async fn start() -> Result<(), color_eyre::Report> {
 
         if !cp_status.success() {
             return Err(color_eyre::eyre::eyre!(
-                "Failed to copy provision script into services VM context."
+                "failed to copy provision script into services VM"
             ));
         }
 
-        println!("[PROC] Provisioning MCP services inside guest container...");
         let provision_status = Command::new("limactl")
             .args(["shell", vm_name, "bash", "/tmp/mcp-services.sh", vm_name])
             .stdout(Stdio::inherit())
@@ -104,15 +96,14 @@ pub async fn start() -> Result<(), color_eyre::Report> {
             .status()?;
 
         if provision_status.success() {
-            println!("[ OK ] MCP services provisioned.");
+            println!("mcp services provisioned");
         } else {
             return Err(color_eyre::eyre::eyre!("MCP services provisioning failed"));
         }
     }
 
-    println!();
-    println!("   SearXNG web UI:  http://127.0.0.1:18766");
-    println!("   mcp-searxng API: http://127.0.0.1:18765/mcp");
+    println!("searxng:  http://127.0.0.1:18766");
+    println!("mcp:      http://127.0.0.1:18765/mcp");
 
     Ok(())
 }
@@ -121,11 +112,9 @@ pub async fn stop() -> Result<(), color_eyre::Report> {
     let vm_name = "muthr-services";
 
     if !is_vm_exists(vm_name) {
-        println!("[WARN] MCP VM '{}' does not exist", vm_name);
         return Ok(());
     }
 
-    println!("[PROC] Stopping MCP VM...");
     let output = Command::new("limactl")
         .arg("stop")
         .arg(vm_name)
@@ -134,10 +123,10 @@ pub async fn stop() -> Result<(), color_eyre::Report> {
 
     match output {
         Some(out) if out.status.success() => {
-            println!("[ OK ] MCP VM stopped.");
+            println!("stopped {}", vm_name);
         }
         _ => {
-            eprintln!("[WARN] ACPI stop sequence sent.");
+            eprintln!("warn: ACPI stop sequence sent");
         }
     }
 
@@ -147,11 +136,7 @@ pub async fn stop() -> Result<(), color_eyre::Report> {
 pub async fn status() -> Result<(), color_eyre::Report> {
     let vm_name = "muthr-services";
 
-    println!("[INFO] MCP VM Status:");
-    println!("===============================================================================");
-
     if !is_vm_exists(vm_name) {
-        println!("[WARN] VM '{}' does not exist", vm_name);
         return Ok(());
     }
 
@@ -169,8 +154,7 @@ pub async fn status() -> Result<(), color_eyre::Report> {
         })
         .unwrap_or_else(|| "Unknown".to_string());
 
-    println!("   VM:             ● {}", status);
-    println!("===============================================================================");
+    println!("mcp-services: {}", status);
 
     Ok(())
 }
@@ -238,36 +222,34 @@ pub async fn delete(force: bool) -> Result<(), color_eyre::Report> {
     let vm_name = "muthr-services";
 
     if !is_vm_exists(vm_name) {
-        println!("[WARN] MCP VM '{}' does not exist", vm_name);
         return Ok(());
     }
 
     if !force && !std::io::stdout().is_terminal() {
-        eprintln!("Error: terminal required for deletion. Use --force to skip confirmation.");
+        eprintln!("err: terminal required for deletion. Use --force.");
         std::process::exit(1);
     }
 
-    println!("[PROC] Deleting MCP services VM '{}'...", vm_name);
+    println!("deleting mcp-services VM");
 
     let unprotect_status = Command::new("limactl")
         .args(["unprotect", vm_name])
         .output()?;
     if !unprotect_status.status.success() {
-        eprintln!("[WARN] Failed to unprotect VM '{}'.", vm_name);
+        eprintln!("warn: failed to unprotect VM");
     }
 
     if is_vm_running(vm_name) {
-        println!("[PROC] Stopping MCP services VM...");
         let stop_output = Command::new("limactl").arg("stop").arg(vm_name).output()?;
         if !stop_output.status.success() {
-            eprintln!("[WARN] Failed to stop VM '{}'.", vm_name);
+            eprintln!("warn: failed to stop VM");
         }
     }
 
     let delete_status = Command::new("limactl").args(["delete", vm_name]).output()?;
 
     if !delete_status.status.success() {
-        return Err(color_eyre::eyre::eyre!("Failed to delete MCP services VM"));
+        return Err(color_eyre::eyre::eyre!("failed to delete MCP services VM"));
     }
 
     let home = std::env::var("HOME")?;
@@ -276,6 +258,6 @@ pub async fn delete(force: bool) -> Result<(), color_eyre::Report> {
         fs::remove_file(&cache_file)?;
     }
 
-    println!("[ OK ] MCP services VM deleted and cache cleaned.");
+    println!("deleted {}", vm_name);
     Ok(())
 }

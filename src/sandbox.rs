@@ -89,15 +89,15 @@ pub fn resolve_workspace_context() -> Result<(String, PathBuf, PathBuf), color_e
         Some(v) => v,
         None => {
             let can_current = std::fs::canonicalize(&current_dir).map_err(|e| {
-                color_eyre::eyre::eyre!("Failed to canonicalize current directory: {}", e)
+                color_eyre::eyre::eyre!("failed to canonicalize current directory: {}", e)
             })?;
             let can_workspace = workspace_path.canonicalize().map_err(|e| {
-                color_eyre::eyre::eyre!("Failed to canonicalize workspace root: {}", e)
+                color_eyre::eyre::eyre!("failed to canonicalize workspace root: {}", e)
             })?;
 
             if can_current == can_workspace {
                 return Err(color_eyre::eyre::eyre!(
-                    "Navigate into a project directory first."
+                    "navigate into a project directory first"
                 ));
             }
 
@@ -105,20 +105,20 @@ pub fn resolve_workspace_context() -> Result<(String, PathBuf, PathBuf), color_e
                 Ok(r) => r,
                 Err(_) => {
                     return Err(color_eyre::eyre::eyre!(
-                        "Current directory is not within the canonicalized workspace root"
+                        "current directory is not within the canonicalized workspace root"
                     ));
                 }
             };
             let project_name = relative
                 .components()
                 .next()
-                .ok_or_else(|| color_eyre::eyre::eyre!("Invalid workspace path"))?
+                .ok_or_else(|| color_eyre::eyre::eyre!("invalid workspace path"))?
                 .as_os_str()
                 .to_str()
-                .ok_or_else(|| color_eyre::eyre::eyre!("Invalid project name"))?;
+                .ok_or_else(|| color_eyre::eyre::eyre!("invalid project name"))?;
 
             let sanitized = sanitize_project_name(project_name)
-                .ok_or_else(|| color_eyre::eyre::eyre!("Sanitized project name is empty"))?;
+                .ok_or_else(|| color_eyre::eyre::eyre!("sanitized project name is empty"))?;
 
             (
                 format!("muthr-{}", sanitized),
@@ -166,7 +166,6 @@ pub async fn vm_is_running(vm_name: &str) -> bool {
 }
 
 pub async fn vm_stop(vm_name: &str) -> Result<(), color_eyre::Report> {
-    println!("\n[PROC] Stopping sandbox VM ({})...", vm_name);
     let output = Command::new("limactl")
         .arg("stop")
         .arg(vm_name)
@@ -175,11 +174,9 @@ pub async fn vm_stop(vm_name: &str) -> Result<(), color_eyre::Report> {
         .ok();
 
     match output {
-        Some(out) if out.status.success() => {
-            println!("[ OK ] VM stopped cleanly. System memory reclaimed.");
-        }
+        Some(out) if out.status.success() => {}
         _ => {
-            eprintln!("[WARN] ACPI stop sequence sent.");
+            eprintln!("warn: ACPI stop sequence sent");
         }
     }
     Ok(())
@@ -192,7 +189,7 @@ pub async fn protect_vm(vm_name: &str) -> Result<(), color_eyre::Report> {
         .await?;
 
     if !status.status.success() {
-        eprintln!("[WARN] Failed to protect VM '{}'.", vm_name);
+        eprintln!("warn: failed to protect VM");
     }
     Ok(())
 }
@@ -204,18 +201,18 @@ pub async fn unprotect_vm(vm_name: &str) -> Result<(), color_eyre::Report> {
         .await?;
 
     if !status.status.success() {
-        eprintln!("[WARN] Failed to unprotect VM '{}'.", vm_name);
+        eprintln!("warn: failed to unprotect VM");
     }
     Ok(())
 }
 
 pub async fn delete_vm(vm_name: &str, force: bool) -> Result<(), color_eyre::Report> {
     if !force && !std::io::stdout().is_terminal() {
-        eprintln!("Error: terminal required for deletion. Use --force to skip confirmation.");
+        eprintln!("err: terminal required for deletion. Use --force to skip.");
         std::process::exit(1);
     }
 
-    println!("[PROC] Deleting sandbox VM '{}'...", vm_name);
+    println!("deleting VM {}", vm_name);
 
     unprotect_vm(vm_name).await?;
 
@@ -242,7 +239,7 @@ pub async fn delete_vm(vm_name: &str, force: bool) -> Result<(), color_eyre::Rep
         fs::remove_file(&profile_cache).await.ok();
     }
 
-    println!("[ OK ] VM '{}' deleted and cache cleaned.", vm_name);
+    println!("deleted {}", vm_name);
     Ok(())
 }
 
@@ -265,7 +262,11 @@ pub async fn run_provision(
         ));
     }
 
-    println!("[PROC] Running provision: {}...", script_name);
+    let mount_str = mount_point
+        .to_str()
+        .ok_or_else(|| color_eyre::eyre::eyre!("workspace mount path contains invalid UTF-8"))?;
+
+    println!("provisioning: {}", script_name);
     let script_content = fs::read_to_string(&host_script).await?;
     let openai_url = format!("http://host.lima.internal:{}/v1", port);
 
@@ -274,10 +275,7 @@ pub async fn run_provision(
         .env("MUTHR_OPENAI_URL", &openai_url)
         .env("MUTHR_MODEL_NAME", model_name)
         .env("MUTHR_CTX_WINDOW", ctx_window.to_string())
-        .env(
-            "MUTHR_WORKSPACE_MOUNT",
-            mount_point.to_str().unwrap_or("/workspace"),
-        )
+        .env("MUTHR_WORKSPACE_MOUNT", mount_str)
         .stdin(Stdio::piped())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
@@ -293,7 +291,7 @@ pub async fn run_provision(
         return Err(color_eyre::eyre::eyre!("Provision failed: {}", script_name));
     }
 
-    println!("[ OK ] Provision complete: {}", script_name);
+    println!("provisioned: {}", script_name);
     Ok(())
 }
 
@@ -308,7 +306,7 @@ async fn wait_for_vm_ready(vm_name: &str) -> Result<(), color_eyre::Report> {
         retries += 1;
         if retries >= max_retries {
             return Err(color_eyre::eyre::eyre!(
-                "Timed out waiting for VM '{}' to become ready",
+                "timed out waiting for VM '{}' to become ready",
                 vm_name
             ));
         }
@@ -318,31 +316,28 @@ async fn wait_for_vm_ready(vm_name: &str) -> Result<(), color_eyre::Report> {
 
 pub async fn up(profile_name: String) -> Result<(), color_eyre::Report> {
     let (vm_name, mount_point, workdir) = resolve_workspace_context()?;
-    println!("[INFO] Target Virtual Environment Context: {}", vm_name);
+    println!("target: {}", vm_name);
 
     let home = std::env::var("HOME")?;
     let config_dir = PathBuf::from(&home).join(".config/muthr");
     let manifest_path = crate::catalog::resolve_manifest(&config_dir, &profile_name);
 
     if !manifest_path.exists() {
-        eprintln!("Error: manifest not found at {:?}", manifest_path);
-        eprintln!("Hint: Run 'muthr init' to install profiles, or create the manifest manually.");
+        eprintln!("err: manifest not found at {:?}", manifest_path);
+        eprintln!("hint: run 'muthr init'");
         std::process::exit(1);
     }
 
     let content = fs::read_to_string(&manifest_path).await?;
+    let mount_str = mount_point
+        .to_str()
+        .ok_or_else(|| color_eyre::eyre::eyre!("workspace path contains invalid UTF-8"))?;
     let expanded = content
-        .replace(
-            "__WORKSPACE_ROOT__",
-            mount_point.to_str().unwrap_or_default(),
-        )
-        .replace("__MOUNT_POINT__", mount_point.to_str().unwrap_or_default());
+        .replace("__WORKSPACE_ROOT__", mount_str)
+        .replace("__MOUNT_POINT__", mount_str);
 
     if !vm_exists(&vm_name).await {
-        println!(
-            "[PROC] VM '{}' not found. Creating and starting...",
-            vm_name
-        );
+        println!("creating VM {}", vm_name);
         let mut tmp_yaml = NamedTempFile::new()?;
         tmp_yaml.write_all(expanded.as_bytes())?;
 
@@ -373,7 +368,7 @@ pub async fn up(profile_name: String) -> Result<(), color_eyre::Report> {
 
         protect_vm(&vm_name).await?;
     } else if !vm_is_running(&vm_name).await {
-        println!("[PROC] Starting sandbox VM ({})...", vm_name);
+        println!("starting VM {}", vm_name);
         let status = Command::new("limactl")
             .args(["start", &vm_name])
             .stdout(Stdio::inherit())
@@ -382,12 +377,12 @@ pub async fn up(profile_name: String) -> Result<(), color_eyre::Report> {
             .await?;
 
         if !status.success() {
-            return Err(color_eyre::eyre::eyre!("Failed to start VM: {}", vm_name));
+            return Err(color_eyre::eyre::eyre!("failed to start VM: {}", vm_name));
         }
 
         wait_for_vm_ready(&vm_name).await?;
     } else {
-        println!("[ OK ] VM already running");
+        println!("VM already running");
     }
 
     // Poll inference engine for runtime context (needed by provision scripts)
@@ -416,7 +411,7 @@ pub async fn up(profile_name: String) -> Result<(), color_eyre::Report> {
 
         let existing_profiles = fs::read_to_string(&cache_dir).await.unwrap_or_default();
         if !existing_profiles.lines().any(|l| l.trim() == profile_name) {
-            println!("[PROC] Applying profile: {}...", profile_name);
+            println!("applying profile: {}", profile_name);
             run_provision(
                 &vm_name,
                 &profile_name,
@@ -436,10 +431,10 @@ pub async fn up(profile_name: String) -> Result<(), color_eyre::Report> {
             fs::create_dir_all(cache_dir.parent().unwrap()).await?;
             fs::write(&cache_dir, existing).await?;
         } else {
-            println!("[ OK ] Profile '{}' already applied.", profile_name);
+            println!("profile '{}' already applied", profile_name);
         }
 
-        println!("[ OK ] Launching application workspace context...");
+        println!("launching workspace context");
         let target_args = match profile_name.as_str() {
             "opencode" => vec!["opencode"],
             "hermes-agent" => vec!["bash", "-l"],
@@ -478,7 +473,7 @@ pub async fn up(profile_name: String) -> Result<(), color_eyre::Report> {
             fs::write(&cache_dir, "base\n").await?;
         }
 
-        println!("[ OK ] Sandbox ready. Launching clean hypervisor shell session...");
+        println!("sandbox ready, launching shell");
         let status = Command::new("limactl")
             .args([
                 "--tty",
@@ -502,7 +497,6 @@ pub async fn up(profile_name: String) -> Result<(), color_eyre::Report> {
 pub async fn down() -> Result<(), color_eyre::Report> {
     let (vm_name, _, _) = resolve_workspace_context()?;
     if !vm_exists(&vm_name).await {
-        println!("[WARN] VM '{}' does not exist", vm_name);
         return Ok(());
     }
     vm_stop(&vm_name).await?;
@@ -511,8 +505,6 @@ pub async fn down() -> Result<(), color_eyre::Report> {
 
 pub async fn list() -> Result<(), color_eyre::Report> {
     let muthr_prefix = "muthr-";
-    println!("[INFO] Managed VMs:");
-    println!("===============================================================================");
 
     let output = Command::new("limactl")
         .args(["ls", "-q"])
@@ -530,7 +522,7 @@ pub async fn list() -> Result<(), color_eyre::Report> {
     };
 
     if vms.is_empty() {
-        println!("[WARN] No managed VMs found");
+        println!("no managed VMs");
         return Ok(());
     }
 
@@ -583,6 +575,5 @@ pub async fn list() -> Result<(), color_eyre::Report> {
         crate::ui::select_table(&headers, rows);
     }
 
-    println!("===============================================================================");
     Ok(())
 }

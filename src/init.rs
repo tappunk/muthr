@@ -12,20 +12,13 @@ pub fn run(cmd: InitCommands) -> Result<(), color_eyre::Report> {
     let config_dir = get_config_dir()?;
 
     if cmd.force {
-        println!("[INIT] Overwriting existing muthr configs...");
+        println!("overwriting existing configs");
     } else if config_dir.exists() {
         let entries: Vec<_> = std::fs::read_dir(&config_dir)?
             .filter_map(|e| e.ok())
             .collect();
 
         if !entries.is_empty() {
-            println!(
-                "[INIT] muthr configs already exist at {}",
-                config_dir.display()
-            );
-            println!(
-                "[INIT] Use --force to overwrite, or skip if you want to keep your customizations."
-            );
             return Ok(());
         }
     }
@@ -43,8 +36,7 @@ pub fn run(cmd: InitCommands) -> Result<(), color_eyre::Report> {
             .as_nanos()
     ));
 
-    println!("[INIT] Cloning muthr-specs into {}...", tmp_dir.display());
-    println!("[INIT] Source: {}", repo_url);
+    println!("cloning muthr-specs into {}", tmp_dir.display());
 
     let status = Command::new("git")
         .args([
@@ -58,7 +50,7 @@ pub fn run(cmd: InitCommands) -> Result<(), color_eyre::Report> {
 
     if !status.success() {
         let _ = std::fs::remove_dir_all(&tmp_dir);
-        eprintln!("[ERR] Failed to clone muthr-specs repository.");
+        eprintln!("err: failed to clone muthr-specs");
         std::process::exit(1);
     }
 
@@ -81,12 +73,7 @@ pub fn run(cmd: InitCommands) -> Result<(), color_eyre::Report> {
         }
     }
 
-    println!("[OK] muthr configs installed successfully.");
-    println!();
-    println!("Next steps:");
-    println!("  muthr list  — view available preset profiles");
-    println!("  muthr serve — start llama-server engine context daemon");
-    println!("  muthr up    — full isolated development VM workflow container spin-up");
+    println!("installed");
 
     Ok(())
 }
@@ -98,7 +85,6 @@ fn sync_managed_dirs(src: &Path, dst: &Path) -> Result<(), color_eyre::Report> {
 
         if src_path.exists() {
             if dst_path.exists() {
-                println!("[INIT] Updating {}...", dir_name);
                 remove_dir_all(&dst_path)?;
             }
             std::fs::rename(&src_path, &dst_path)

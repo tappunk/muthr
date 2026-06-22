@@ -62,10 +62,7 @@ pub async fn poll_loaded_model(
         }
 
         if i % 5 == 0 {
-            eprintln!(
-                "[WARN] Still waiting for loaded model... ({}/{})",
-                i, max_retries
-            );
+            eprintln!("waiting for loaded model ({}/{})", i, max_retries);
         }
 
         tokio::time::sleep(Duration::from_secs_f32(interval_secs)).await;

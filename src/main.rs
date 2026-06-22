@@ -168,10 +168,10 @@ async fn main() -> color_eyre::Result<()> {
 
 async fn boot(verbose: bool) -> Result<(), color_eyre::Report> {
     if engine::is_running().await {
-        println!("[OK] Engine already running.");
+        println!("engine already running");
     } else {
         if verbose {
-            println!("[PROC] Starting inference engine...");
+            println!("starting inference engine");
         }
         let cfg = config::load()?;
         let server_port = cfg.server_port.unwrap_or(8080);
@@ -192,15 +192,14 @@ async fn boot(verbose: bool) -> Result<(), color_eyre::Report> {
     };
 
     if running {
-        println!("[OK] MCP services already running.");
+        // nothing - already running
     } else {
         if verbose {
-            println!("[PROC] Starting MCP services VM...");
+            println!("starting MCP services VM");
         }
         services::start().await?;
     }
 
-    println!("[OK] Boot complete.");
     Ok(())
 }
 
@@ -235,15 +234,8 @@ async fn run() -> Result<(), color_eyre::Report> {
 
             let profile_name = match profile {
                 Some(p) => p,
-                None if vm_exists => {
-                    println!(
-                        "[INFO] Sandbox '{}' already exists — launching session.",
-                        vm_name
-                    );
-                    "base".to_string()
-                }
+                None if vm_exists => "base".to_string(),
                 None => {
-                    println!("Select a provisioning profile:");
                     let mut items: Vec<String> = Vec::new();
                     for name in &all_profiles {
                         let desc = match *name {
@@ -254,11 +246,10 @@ async fn run() -> Result<(), color_eyre::Report> {
                         };
                         items.push(format!("  {}) {:<15} {}", items.len() + 1, name, desc));
                     }
-                    println!();
                     for item in &items {
                         println!("{}", item);
                     }
-                    print!("\nEnter choice ({}-{}) or q to quit: ", 1, items.len());
+                    print!("choice ({}-{}) or q: ", 1, items.len());
                     std::io::Write::flush(&mut std::io::stdout()).ok();
 
                     let mut input = String::new();
@@ -266,7 +257,6 @@ async fn run() -> Result<(), color_eyre::Report> {
                     let trimmed = input.trim();
 
                     if trimmed == "q" || trimmed.is_empty() {
-                        println!("[INFO] Cancelled.");
                         return Ok(());
                     }
 
@@ -276,7 +266,6 @@ async fn run() -> Result<(), color_eyre::Report> {
                             all_profiles[idx].to_string()
                         }
                         _ => {
-                            println!("[INFO] Invalid selection.");
                             return Ok(());
                         }
                     }
@@ -289,7 +278,7 @@ async fn run() -> Result<(), color_eyre::Report> {
         Some(Commands::Delete { force }) => {
             let (vm_name, _, _) = sandbox::resolve_workspace_context()?;
             if vm_name.is_empty() || vm_name == "muthr-config" {
-                eprintln!("Error: must be inside a project directory.");
+                eprintln!("err: must be inside a project directory");
                 std::process::exit(1);
             }
             sandbox::delete_vm(&vm_name, force).await?

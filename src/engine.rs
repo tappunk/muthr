@@ -31,34 +31,6 @@ fn physical_cpu_count() -> u32 {
         _ => {}
     }
 
-    let output = std::process::Command::new("sysctl")
-        .args(["-n", "hw.physicalcpu"])
-        .output();
-    match output {
-        Ok(ref out) if out.status.success() => {
-            let raw = String::from_utf8_lossy(&out.stdout);
-            let digits: String = raw.chars().filter(|c| c.is_ascii_digit()).collect();
-            if let Ok(count) = digits.parse::<u32>() {
-                return count;
-            }
-        }
-        _ => {}
-    }
-
-    let output = std::process::Command::new("sysctl")
-        .args(["-n", "hw.physicalcpu"])
-        .output();
-    match output {
-        Ok(ref out) if out.status.success() => {
-            let raw = String::from_utf8_lossy(&out.stdout);
-            let digits: String = raw.chars().filter(|c| c.is_ascii_digit()).collect();
-            if let Ok(count) = digits.parse::<u32>() {
-                return count;
-            }
-        }
-        _ => {}
-    }
-
     std::thread::available_parallelism()
         .map(|p| p.get() as u32)
         .unwrap_or(4)
@@ -66,10 +38,7 @@ fn physical_cpu_count() -> u32 {
 
 fn clamp_threads(value: u32, max_threads: u32) -> u32 {
     if value > max_threads && value != 0 {
-        eprintln!(
-            "[WARN] Thread count {} exceeds physical CPU count ({}). Clamping to {}.",
-            value, max_threads, max_threads
-        );
+        eprintln!("warn: clamping threads {} → {}", value, max_threads);
         max_threads
     } else {
         value
@@ -135,17 +104,14 @@ pub async fn serve(
         None => {
             let presets = preset::list_presets()?;
             if presets.is_empty() {
-                eprintln!("[ERR] No providers found in ~/.config/muthr/provider.d/");
+                eprintln!("err: no presets in ~/.config/muthr/provider.d/");
                 return Ok(());
             }
 
             let names: Vec<&str> = presets.iter().map(|p| p.name.as_str()).collect();
             match ui::select_list(&names) {
                 Some(idx) => presets[idx].name.clone(),
-                None => {
-                    println!("[INFO] Cancelled.");
-                    return Ok(());
-                }
+                None => return Ok(()),
             }
         }
     };
@@ -186,7 +152,7 @@ pub async fn serve(
         {
             if is_llama_server_pid(old_pid).await {
                 eprintln!(
-                    "[WARN] Server already running (PID {}). Stopping first.",
+                    "warn: server already running (PID {}), stopping first",
                     old_pid
                 );
                 let _ = stop().await;
@@ -289,10 +255,7 @@ pub async fn serve(
     }
 
     if foreground {
-        println!("[PROC] Starting llama.cpp Server (Direct Mode)...");
-        println!("   Binding Address : http://{}:{}", bind_host, server_port);
-        println!("   Profile Target  : {:?}", preset_path);
-        println!("   Press Ctrl+C to stop the server.\n");
+        println!("llama-server starting on {}:{}", bind_host, server_port);
 
         let mut child = AsyncCommand::new("llama-server")
             .args(&args)
@@ -302,16 +265,14 @@ pub async fn serve(
 
         let status = child.wait().await?;
         if !status.success() {
-            eprintln!("[WARN] Server exited with code: {}", status);
+            eprintln!("err: server exited with code {}", status);
         }
         Ok(())
     } else {
-        println!("[PROC] Starting llama.cpp Server in background (Direct Mode)...");
-        println!("   Binding Address : http://{}:{}", bind_host, server_port);
-        println!("   Profile Target  : {:?}", preset_path);
-        println!("   Log file        : {:?}", log_stdout);
-        println!("   Error log       : {:?}", log_stderr);
-        println!();
+        println!(
+            "llama-server starting (background) on {}:{}",
+            bind_host, server_port
+        );
 
         let stdout_file = std::fs::OpenOptions::new()
             .create(true)
@@ -338,8 +299,7 @@ pub async fn serve(
             Ok(c) => {
                 let pid = c.id();
                 fs::write(&pid_file, pid.to_string()).await?;
-                println!("[ OK ] Server started (PID {})", pid);
-                println!("   Run 'muthr stop' to stop the server.");
+                println!("started PID {}", pid);
                 Ok(())
             }
             Err(e) => Err(e.into()),
@@ -353,7 +313,6 @@ pub async fn stop() -> Result<(), color_eyre::Report> {
     let pid_file = cache_dir.join("llama-server.pid");
 
     if !pid_file.exists() {
-        println!("[WARN] No PID file found — server may not be running.");
         return Ok(());
     }
 
@@ -361,18 +320,11 @@ pub async fn stop() -> Result<(), color_eyre::Report> {
     let pid = pid_bytes.trim().parse::<u32>()?;
 
     if !is_process_alive(pid) {
-        println!(
-            "[WARN] PID {} not found (stale PID file). Cleaning up.",
-            pid
-        );
         fs::remove_file(&pid_file).await.ok();
         return Ok(());
     }
 
-    println!(
-        "[PROC] Initiating graceful shutdown (SIGTERM) for PID {}...",
-        pid
-    );
+    println!("stopping PID {}", pid);
     let _ = AsyncCommand::new("kill")
         .args(["-15", &pid.to_string()])
         .output()
@@ -388,14 +340,14 @@ pub async fn stop() -> Result<(), color_eyre::Report> {
     }
 
     if died {
-        println!("[ OK ] Server stopped gracefully. VRAM released.");
+        println!("stopped");
     } else {
-        eprintln!("[WARN] Server did not respond to SIGTERM after 15s. Escalating to SIGKILL.");
+        eprintln!("warn: SIGTERM failed, escalating to SIGKILL");
         let _ = AsyncCommand::new("kill")
             .args(["-9", &pid.to_string()])
             .output()
             .await;
-        println!("[ OK ] Server force-killed.");
+        println!("killed");
     }
 
     fs::remove_file(&pid_file).await.ok();
@@ -421,15 +373,15 @@ pub async fn status() -> Result<(), color_eyre::Report> {
         .success();
 
     if preset_name.is_empty() {
-        println!("● muthr — not configured");
+        println!("muthr: not configured");
     } else if is_server_running {
-        println!("● muthr is running");
+        println!("muthr: running");
     } else {
-        println!("● muthr — configured, server stopped");
+        println!("muthr: configured, stopped");
     }
 
     if preset_name.is_empty() {
-        println!("    Inference Engine   (none)");
+        println!("  engine          (none)");
     } else {
         let preset =
             preset::resolve_preset(&preset_name).and_then(|p| preset::parse_preset(&p).ok());
@@ -437,13 +389,13 @@ pub async fn status() -> Result<(), color_eyre::Report> {
             .as_ref()
             .map(|p| p.name.as_str())
             .unwrap_or_else(|| preset_name.as_str());
-        println!("    Inference Engine   active      {}", profile_label);
+        println!("  engine          active      {}", profile_label);
     }
 
     if is_server_running {
-        println!("    Server             running");
+        println!("  server          running");
     } else {
-        println!("    Server             stopped");
+        println!("  server          stopped");
     }
 
     let services_vm = "muthr-services";
@@ -466,7 +418,7 @@ pub async fn status() -> Result<(), color_eyre::Report> {
     };
 
     if let Some(status) = services_status {
-        println!("    VM Cluster         {}     {}", services_vm, status);
+        println!("  mcp-services      {}     {}", services_vm, status);
 
         let provision_output = AsyncCommand::new("limactl")
             .args([
@@ -482,10 +434,10 @@ pub async fn status() -> Result<(), color_eyre::Report> {
 
         match provision_output {
             Some(out) if out.status.success() => {
-                println!("    MCP Services       provisioned");
+                println!("  mcp-provisioned   yes");
             }
             _ => {
-                println!("    MCP Services       not provisioned");
+                println!("  mcp-provisioned   no");
             }
         }
     }
@@ -513,12 +465,12 @@ pub async fn status() -> Result<(), color_eyre::Report> {
         }
 
         if !active_sandboxes.is_empty() {
-            println!("    Sandboxes");
+            println!("  sandboxes");
             for (i, (token, status)) in active_sandboxes.iter().enumerate() {
                 let connector = if i + 1 == active_sandboxes.len() {
-                    "      └─"
+                    "    └─"
                 } else {
-                    "      ├─"
+                    "    ├─"
                 };
                 println!("{} {:<20} {}", connector, token, status);
             }
@@ -531,7 +483,7 @@ pub async fn status() -> Result<(), color_eyre::Report> {
 pub fn list() -> Result<(), color_eyre::Report> {
     let presets = preset::list_presets()?;
     if presets.is_empty() {
-        println!("[WARN] No providers found in ~/.config/muthr/provider.d/");
+        eprintln!("err: no presets in ~/.config/muthr/provider.d/");
         return Ok(());
     }
 
@@ -549,10 +501,6 @@ pub fn list() -> Result<(), color_eyre::Report> {
     match ui::select_table(&headers, rows) {
         Some(idx) => println!("{}", presets[idx].name),
         None => {
-            println!("Available presets:");
-            println!(
-                "==============================================================================="
-            );
             for p in &presets {
                 println!(
                     "  {:<30} {} [{}]",
@@ -561,9 +509,6 @@ pub fn list() -> Result<(), color_eyre::Report> {
                     p.slots.len()
                 );
             }
-            println!(
-                "==============================================================================="
-            );
         }
     }
 
@@ -579,19 +524,12 @@ async fn apply_vram_limits(_foreground: bool) {
 
         let wired_mb = (mem_bytes / 1024 / 1024) * 85 / 100;
 
-        println!(
-            "[INFO] High-memory host detected ({}GB). Allocating optimized hardware VRAM limit: {}MB",
-            gb, wired_mb
-        );
-        println!("[PROC] Tuning Metal performance limits (requires sudo validation)...");
+        println!("tuning iogpu.wired_limit_mb={} ({}GB host)", wired_mb, gb);
 
         let tty = match std::fs::File::open("/dev/tty") {
             Ok(f) => f,
             Err(e) => {
-                eprintln!(
-                    "[WARN] Cannot open /dev/tty for sudo: {} — VRAM tuning skipped",
-                    e
-                );
+                eprintln!("warn: cannot open /dev/tty for sudo: {}", e);
                 return;
             }
         };
@@ -609,10 +547,8 @@ async fn apply_vram_limits(_foreground: bool) {
             .await;
 
         match status {
-            Ok(s) if s.success() => {
-                println!("[ OK ] Metal hardware scaling metrics applied successfully.")
-            }
-            _ => eprintln!("[WARN] Metal VRAM performance tuning declined or timed out."),
+            Ok(s) if s.success() => println!("iogpu limits applied"),
+            _ => eprintln!("warn: iogpu tuning declined or timed out"),
         }
     }
 }

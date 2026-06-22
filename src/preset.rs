@@ -141,11 +141,10 @@ pub fn parse_preset(path: &Path) -> Result<Preset, color_eyre::Report> {
         if trimmed.starts_with('[') && trimmed.ends_with(']') {
             let next_section = trimmed[1..trimmed.len() - 1].to_string();
             if current_section == "*" {
-                global_values.clone_from(&current_values);
+                global_values = std::mem::take(&mut current_values);
             } else {
-                sections.push((current_section.clone(), current_values.clone()));
+                sections.push((current_section, std::mem::take(&mut current_values)));
             }
-            current_values.clear();
             current_section = next_section;
             continue;
         }
@@ -157,7 +156,7 @@ pub fn parse_preset(path: &Path) -> Result<Preset, color_eyre::Report> {
     }
 
     if current_section == "*" {
-        global_values.clone_from(&current_values);
+        global_values = std::mem::take(&mut current_values);
     } else {
         sections.push((current_section, current_values));
     }

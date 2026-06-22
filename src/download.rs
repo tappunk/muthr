@@ -12,16 +12,13 @@ pub async fn download(source: &str, file: Option<&str>) -> Result<(), color_eyre
         }
         (repo, Some(file)) => (repo.to_string(), file.to_string()),
         _ => {
-            eprintln!("[ERR ] Usage: muthr download <hf-repo> <filename> | <hf-url>");
-            eprintln!(
-                "  Example: muthr download unsloth/Qwen3.6-35B-A3B-GGUF Qwen3.6-35B-A3B-UD-Q4_K_M.gguf"
-            );
+            eprintln!("err: muthr download <hf-repo> <filename> | <hf-url>");
             return Ok(());
         }
     };
 
     if !filename.ends_with(".gguf") {
-        eprintln!("[ERR ] Expected a .gguf file, got '{}'", filename);
+        eprintln!("err: expected .gguf file");
         return Ok(());
     }
 
@@ -46,15 +43,11 @@ pub async fn download(source: &str, file: Option<&str>) -> Result<(), color_eyre
     fs::create_dir_all(&model_subdir).await?;
 
     if target_path.exists() {
-        eprintln!(
-            "[WARN] File exists at {:?}. Aborting to prevent overwrite.",
-            target_path
-        );
+        eprintln!("warn: file exists, aborting to prevent overwrite");
         return Ok(());
     }
 
-    println!("[PROC] Fetching: {}", filename);
-    println!("       From:    https://huggingface.co/{}", repo);
+    println!("fetching {}", filename);
 
     let mut headers = reqwest::header::HeaderMap::new();
     if let Ok(token) = std::env::var("HF_TOKEN") {
@@ -94,9 +87,10 @@ pub async fn download(source: &str, file: Option<&str>) -> Result<(), color_eyre
     pb.finish_with_message("Downloaded");
     fs::rename(&tmp_file, &target_path).await?;
 
-    println!("[ OK ] Download complete.");
     if let Ok(metadata) = fs::metadata(&target_path).await {
-        println!("       Size: {}", human_size(metadata.len()));
+        println!("done {} ({} bytes)", target_path.display(), metadata.len());
+    } else {
+        println!("done");
     }
 
     Ok(())
@@ -124,17 +118,4 @@ fn parse_hf_url(url: &str) -> Result<(String, String), color_eyre::Report> {
     }
 
     Ok((repo.to_string(), filename.to_string()))
-}
-
-fn human_size(bytes: u64) -> String {
-    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
-    let mut size = bytes as f64;
-    let mut unit_idx = 0;
-
-    while size >= 1024.0 && unit_idx < UNITS.len() - 1 {
-        size /= 1024.0;
-        unit_idx += 1;
-    }
-
-    format!("{:.1} {}", size, UNITS[unit_idx])
 }

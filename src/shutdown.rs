@@ -40,13 +40,10 @@ async fn is_vm_running(vm_name: &str) -> bool {
 
 async fn stop_vm(name: String, timeout_secs: u64, verbose: bool) {
     if verbose {
-        println!("[PROC] Stopping VM '{}'...", name);
+        println!("stopping VM {}", name);
     }
 
     if !is_vm_running(&name).await {
-        if verbose {
-            println!("[OK] VM '{}' is not running.", name);
-        }
         return;
     }
 
@@ -57,20 +54,20 @@ async fn stop_vm(name: String, timeout_secs: u64, verbose: bool) {
         .await;
 
     if !matches!(status, Ok(s) if s.success()) {
-        eprintln!("[WARN] Failed to stop VM '{}' via limactl.", name);
+        eprintln!("warn: failed to stop VM {}", name);
     }
 
     let start = std::time::Instant::now();
     while start.elapsed().as_secs() < timeout_secs {
         if !is_vm_running(&name).await {
-            println!("[OK] VM '{}' stopped gracefully.", name);
+            println!("stopped {}", name);
             return;
         }
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }
 
     eprintln!(
-        "[WARN] VM '{}' timed out after {}s. Escalating to force termination...",
+        "warn: {} timed out after {}s, force stopping",
         name, timeout_secs
     );
     let _ = AsyncCommand::new("limactl")
@@ -86,7 +83,7 @@ pub async fn run(verbose: bool, timeout_secs: Option<u64>) {
     let timeout = timeout_secs.unwrap_or(default_timeout);
 
     if verbose {
-        println!("[PROC] Scanning runtime hypervisor layers...");
+        println!("scanning VMs");
     }
 
     let sandboxes = discover_sandbox_vms().await;
@@ -98,11 +95,11 @@ pub async fn run(verbose: bool, timeout_secs: Option<u64>) {
     stop_vm("muthr-services".to_string(), timeout, verbose).await;
 
     if verbose {
-        println!("[PROC] Tearing down local hardware inference loops...");
+        println!("stopping inference engine");
     }
     let _ = engine::stop().await;
 
     if verbose {
-        println!("[OK] Global context engine shutdown complete.");
+        println!("shutdown complete");
     }
 }

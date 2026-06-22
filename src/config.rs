@@ -47,11 +47,10 @@ impl MuthrConfig {
 
     pub fn print_resolved(&self) {
         let (server_port, workspace_root, model_dir, provision_profile) = self.clone().resolve();
-        println!("muthr configuration:");
-        println!("  server_port:                   {}", server_port);
-        println!("  workspace_root:                {}", workspace_root);
-        println!("  model_dir:                     {}", model_dir);
-        println!("  default_provision_profile:     {}", provision_profile);
+        println!("server_port       {}", server_port);
+        println!("workspace_root    {}", workspace_root);
+        println!("model_dir         {}", model_dir);
+        println!("provision_profile {}", provision_profile);
     }
 }
 
@@ -88,8 +87,6 @@ pub fn init_config(force: bool) -> Result<(), color_eyre::Report> {
     let config_path = config_dir.join("muthr.toml");
 
     if config_path.exists() && !force {
-        println!("[INFO] muthr.toml already exists at {:?}", config_path);
-        println!("[INFO] Use --force to overwrite.");
         return Ok(());
     }
 
@@ -103,6 +100,6 @@ default_provision_profile = "base"
 "##;
 
     fs::write(&config_path, template)?;
-    println!("[OK] muthr.toml created at {:?}", config_path);
+    println!("created {}", config_path.display());
     Ok(())
 }
