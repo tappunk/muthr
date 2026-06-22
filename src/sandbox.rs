@@ -41,6 +41,11 @@ fn paths_are_prefix(current: &Path, potential_parent: &Path) -> bool {
         .all(|(a, b)| a == b)
 }
 
+fn shell_single_quote(value: &str) -> String {
+    let escaped = value.replace('\'', "'\\''");
+    format!("'{}'", escaped)
+}
+
 pub fn resolve_workspace_context() -> Result<(String, PathBuf, PathBuf), color_eyre::Report> {
     let current_dir = std::env::current_dir()?;
     let home = std::env::var("HOME")?;
@@ -269,20 +274,24 @@ pub async fn run_provision(
     eprintln!("info: provisioning: {}", script_name);
     let script_content = fs::read_to_string(&host_script).await?;
     let openai_url = format!("http://host.lima.internal:{}/v1", port);
+    let exported_env = format!(
+        "export MUTHR_OPENAI_URL={}\nexport MUTHR_MODEL_NAME={}\nexport MUTHR_CTX_WINDOW={}\nexport MUTHR_WORKSPACE_MOUNT={}\n",
+        shell_single_quote(&openai_url),
+        shell_single_quote(model_name),
+        ctx_window,
+        shell_single_quote(mount_str)
+    );
+    let full_script = format!("{}\n{}", exported_env, script_content);
 
     let mut child = Command::new("limactl")
         .args(["shell", "--workdir", "/tmp", vm_name, "bash"])
-        .env("MUTHR_OPENAI_URL", &openai_url)
-        .env("MUTHR_MODEL_NAME", model_name)
-        .env("MUTHR_CTX_WINDOW", ctx_window.to_string())
-        .env("MUTHR_WORKSPACE_MOUNT", mount_str)
         .stdin(Stdio::piped())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .spawn()?;
 
     if let Some(ref mut stdin) = child.stdin {
-        stdin.write_all(script_content.as_bytes()).await?;
+        stdin.write_all(full_script.as_bytes()).await?;
     }
     std::mem::drop(child.stdin.take());
 
