@@ -102,8 +102,8 @@ rollback() {
   if git rev-parse "v$NEW_VERSION" >/dev/null 2>&1; then
     git tag -d "v$NEW_VERSION"
   fi
+  rm -f Cargo.toml.bak flake.nix.bak "$ARCHIVE_NAME" "$CHECKSUM_NAME" 2>/dev/null || true
   git checkout -- Cargo.toml flake.nix 2>/dev/null || true
-  rm -f "$ARCHIVE_NAME" "$CHECKSUM_NAME" 2>/dev/null || true
   echo "[WARN] Rolled back. Re-run release.sh to try again."
 }
 trap rollback ERR

@@ -544,6 +544,14 @@ async fn apply_vram_limits(_foreground: bool) {
             }
         };
 
+        let stderr_tty = match tty.try_clone() {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!("warn: cannot clone /dev/tty for sudo stderr: {}", e);
+                return;
+            }
+        };
+
         let status = AsyncCommand::new("sudo")
             .args([
                 "sysctl",
@@ -552,7 +560,7 @@ async fn apply_vram_limits(_foreground: bool) {
             ])
             .stdin(stdin_tty)
             .stdout(stdout_tty)
-            .stderr(tty)
+            .stderr(stderr_tty)
             .status()
             .await;
 
