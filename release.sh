@@ -95,20 +95,33 @@ if $DRY_RUN; then
   exit 0
 fi
 
-INITIAL_COMMIT=$(git rev-parse HEAD)
+BACKUP_CARGO_TOML=""
+BACKUP_FLAKE_NIX=""
 rollback() {
   echo ""
   echo "[CRIT] Release pipeline interrupted!"
   if git rev-parse "v$NEW_VERSION" >/dev/null 2>&1; then
     git tag -d "v$NEW_VERSION"
   fi
-  rm -f Cargo.toml.bak flake.nix.bak "$ARCHIVE_NAME" "$CHECKSUM_NAME" 2>/dev/null || true
-  git checkout -- Cargo.toml flake.nix 2>/dev/null || true
+  if [[ -n "$BACKUP_CARGO_TOML" && -f "$BACKUP_CARGO_TOML" ]]; then
+    cp "$BACKUP_CARGO_TOML" Cargo.toml
+  fi
+  if [[ -n "$BACKUP_FLAKE_NIX" && -f "$BACKUP_FLAKE_NIX" ]]; then
+    cp "$BACKUP_FLAKE_NIX" flake.nix
+  fi
+  rm -f Cargo.toml.bak flake.nix.bak "${ARCHIVE_NAME:-}" "${CHECKSUM_NAME:-}" "$BACKUP_CARGO_TOML" "$BACKUP_FLAKE_NIX" 2>/dev/null || true
+  if [[ -n "${STAGING_DIR:-}" && -d "${STAGING_DIR}" ]]; then
+    rm -rf "${STAGING_DIR}"
+  fi
   echo "[WARN] Rolled back. Re-run release.sh to try again."
 }
 trap rollback ERR
 
 echo "[PROC] Updating versioning configuration..."
+BACKUP_CARGO_TOML=$(mktemp)
+BACKUP_FLAKE_NIX=$(mktemp)
+cp Cargo.toml "$BACKUP_CARGO_TOML"
+cp flake.nix "$BACKUP_FLAKE_NIX"
 sed -i.bak "s/version = \"$CURRENT_VERSION\"/version = \"$NEW_VERSION\"/" Cargo.toml flake.nix
 rm Cargo.toml.bak flake.nix.bak
 
@@ -129,6 +142,9 @@ cp README.md LICENSE "${STAGING_DIR}/${BIN_NAME}/" 2>/dev/null || true
 tar -czf "$ARCHIVE_NAME" -C "$STAGING_DIR" "${BIN_NAME}"
 shasum -a 256 "$ARCHIVE_NAME" >"$CHECKSUM_NAME"
 rm -rf "$STAGING_DIR"
+rm -f "$BACKUP_CARGO_TOML" "$BACKUP_FLAKE_NIX"
+BACKUP_CARGO_TOML=""
+BACKUP_FLAKE_NIX=""
 
 echo "[PROC] Recording version changes to Git history..."
 git add Cargo.toml Cargo.lock flake.nix

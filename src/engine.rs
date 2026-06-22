@@ -322,6 +322,15 @@ pub async fn stop() -> Result<(), color_eyre::Report> {
     let pid_bytes = fs::read_to_string(&pid_file).await?;
     let pid = pid_bytes.trim().parse::<u32>()?;
 
+    if !is_llama_server_pid(pid).await {
+        eprintln!(
+            "warning: stale pid file for non-llama process {}, removing",
+            pid
+        );
+        fs::remove_file(&pid_file).await.ok();
+        return Ok(());
+    }
+
     if !is_process_alive(pid) {
         fs::remove_file(&pid_file).await.ok();
         return Ok(());
