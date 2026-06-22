@@ -38,7 +38,7 @@ fn physical_cpu_count() -> u32 {
 
 fn clamp_threads(value: u32, max_threads: u32) -> u32 {
     if value > max_threads && value != 0 {
-        eprintln!("warn: clamping threads {} → {}", value, max_threads);
+        eprintln!("warning: clamping threads {} -> {}", value, max_threads);
         max_threads
     } else {
         value
@@ -104,7 +104,7 @@ pub async fn serve(
         None => {
             let presets = preset::list_presets()?;
             if presets.is_empty() {
-                eprintln!("err: no presets in ~/.config/muthr/provider.d/");
+                eprintln!("error: no presets in ~/.config/muthr/provider.d/");
                 return Ok(());
             }
 
@@ -117,7 +117,7 @@ pub async fn serve(
     };
 
     let preset_path = preset::resolve_preset(&target_profile)
-        .ok_or_else(|| color_eyre::eyre::eyre!("Preset not found: {}", target_profile))?;
+        .ok_or_else(|| color_eyre::eyre::eyre!("preset not found: {}", target_profile))?;
 
     apply_vram_limits(foreground).await;
 
@@ -152,7 +152,7 @@ pub async fn serve(
         {
             if is_llama_server_pid(old_pid).await {
                 eprintln!(
-                    "warn: server already running (PID {}), stopping first",
+                    "warning: server already running (pid {}), stopping first",
                     old_pid
                 );
                 let _ = stop().await;
@@ -255,7 +255,10 @@ pub async fn serve(
     }
 
     if foreground {
-        println!("llama-server starting on {}:{}", bind_host, server_port);
+        eprintln!(
+            "info: llama-server starting on {}:{}",
+            bind_host, server_port
+        );
 
         let mut child = AsyncCommand::new("llama-server")
             .args(&args)
@@ -265,11 +268,11 @@ pub async fn serve(
 
         let status = child.wait().await?;
         if !status.success() {
-            eprintln!("err: server exited with code {}", status);
+            eprintln!("error: server exited with code {}", status);
         }
         Ok(())
     } else {
-        println!(
+        eprintln!(
             "llama-server starting (background) on {}:{}",
             bind_host, server_port
         );
@@ -299,7 +302,7 @@ pub async fn serve(
             Ok(c) => {
                 let pid = c.id();
                 fs::write(&pid_file, pid.to_string()).await?;
-                println!("started PID {}", pid);
+                eprintln!("info: started pid {}", pid);
                 Ok(())
             }
             Err(e) => Err(e.into()),
@@ -324,7 +327,7 @@ pub async fn stop() -> Result<(), color_eyre::Report> {
         return Ok(());
     }
 
-    println!("stopping PID {}", pid);
+    eprintln!("info: stopping pid {}", pid);
     let _ = AsyncCommand::new("kill")
         .args(["-15", &pid.to_string()])
         .output()
@@ -340,14 +343,14 @@ pub async fn stop() -> Result<(), color_eyre::Report> {
     }
 
     if died {
-        println!("stopped");
+        eprintln!("info: stopped");
     } else {
-        eprintln!("warn: SIGTERM failed, escalating to SIGKILL");
+        eprintln!("warning: sigterm failed, escalating to sigkill");
         let _ = AsyncCommand::new("kill")
             .args(["-9", &pid.to_string()])
             .output()
             .await;
-        println!("killed");
+        eprintln!("info: killed");
     }
 
     fs::remove_file(&pid_file).await.ok();
@@ -412,7 +415,7 @@ pub async fn status() -> Result<(), color_eyre::Report> {
     };
 
     if let Some(status) = services_status {
-        println!("  mcp-services      {}     {}", services_vm, status);
+        println!("  mcp services     {}     {}", services_vm, status);
 
         let provision_output = AsyncCommand::new("limactl")
             .args([
@@ -428,10 +431,10 @@ pub async fn status() -> Result<(), color_eyre::Report> {
 
         match provision_output {
             Some(out) if out.status.success() => {
-                println!("  mcp-provisioned   yes");
+                println!("  mcp provisioned  yes");
             }
             _ => {
-                println!("  mcp-provisioned   no");
+                println!("  mcp provisioned  no");
             }
         }
     }
@@ -477,7 +480,7 @@ pub async fn status() -> Result<(), color_eyre::Report> {
 pub fn list() -> Result<(), color_eyre::Report> {
     let presets = preset::list_presets()?;
     if presets.is_empty() {
-        eprintln!("err: no presets in ~/.config/muthr/provider.d/");
+        eprintln!("error: no presets in ~/.config/muthr/provider.d/");
         return Ok(());
     }
 
@@ -518,12 +521,15 @@ async fn apply_vram_limits(_foreground: bool) {
 
         let wired_mb = (mem_bytes / 1024 / 1024) * 85 / 100;
 
-        println!("tuning iogpu.wired_limit_mb={} ({}GB host)", wired_mb, gb);
+        eprintln!(
+            "info: tuning iogpu.wired_limit_mb={} ({}gb host)",
+            wired_mb, gb
+        );
 
         let tty = match std::fs::File::open("/dev/tty") {
             Ok(f) => f,
             Err(e) => {
-                eprintln!("warn: cannot open /dev/tty for sudo: {}", e);
+                eprintln!("warning: cannot open /dev/tty for sudo: {}", e);
                 return;
             }
         };
@@ -531,7 +537,7 @@ async fn apply_vram_limits(_foreground: bool) {
         let stdin_tty = match tty.try_clone() {
             Ok(f) => f,
             Err(e) => {
-                eprintln!("warn: cannot clone /dev/tty for sudo stdin: {}", e);
+                eprintln!("warning: cannot clone /dev/tty for sudo stdin: {}", e);
                 return;
             }
         };
@@ -539,7 +545,7 @@ async fn apply_vram_limits(_foreground: bool) {
         let stdout_tty = match tty.try_clone() {
             Ok(f) => f,
             Err(e) => {
-                eprintln!("warn: cannot clone /dev/tty for sudo stdout: {}", e);
+                eprintln!("warning: cannot clone /dev/tty for sudo stdout: {}", e);
                 return;
             }
         };
@@ -547,7 +553,7 @@ async fn apply_vram_limits(_foreground: bool) {
         let stderr_tty = match tty.try_clone() {
             Ok(f) => f,
             Err(e) => {
-                eprintln!("warn: cannot clone /dev/tty for sudo stderr: {}", e);
+                eprintln!("warning: cannot clone /dev/tty for sudo stderr: {}", e);
                 return;
             }
         };
@@ -565,8 +571,8 @@ async fn apply_vram_limits(_foreground: bool) {
             .await;
 
         match status {
-            Ok(s) if s.success() => println!("iogpu limits applied"),
-            _ => eprintln!("warn: iogpu tuning declined or timed out"),
+            Ok(s) if s.success() => eprintln!("info: iogpu limits applied"),
+            _ => eprintln!("warning: iogpu tuning declined or timed out"),
         }
     }
 }

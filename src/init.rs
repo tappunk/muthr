@@ -12,7 +12,7 @@ pub fn run(cmd: InitCommands) -> Result<(), color_eyre::Report> {
     let config_dir = get_config_dir()?;
 
     if cmd.force {
-        println!("overwriting existing configs");
+        eprintln!("info: overwriting existing configs");
     } else if config_dir.exists() {
         let entries: Vec<_> = std::fs::read_dir(&config_dir)?
             .filter_map(|e| e.ok())
@@ -36,7 +36,7 @@ pub fn run(cmd: InitCommands) -> Result<(), color_eyre::Report> {
             .as_nanos()
     ));
 
-    println!("cloning muthr-specs into {}", tmp_dir.display());
+    eprintln!("info: cloning muthr-specs into {}", tmp_dir.display());
 
     let status = Command::new("git")
         .args(["clone", "--depth", "1", &repo_url])
@@ -45,7 +45,7 @@ pub fn run(cmd: InitCommands) -> Result<(), color_eyre::Report> {
 
     if !status.success() {
         let _ = std::fs::remove_dir_all(&tmp_dir);
-        eprintln!("err: failed to clone muthr-specs");
+        eprintln!("error: failed to clone muthr-specs");
         std::process::exit(1);
     }
 
@@ -57,7 +57,7 @@ pub fn run(cmd: InitCommands) -> Result<(), color_eyre::Report> {
         sync_managed_dirs(&tmp_dir, &config_dir)?;
     } else {
         std::fs::rename(&tmp_dir, &config_dir)
-            .map_err(|e| color_eyre::eyre::eyre!("Failed to install configs: {}", e))?;
+            .map_err(|e| color_eyre::eyre::eyre!("failed to install configs: {}", e))?;
     }
 
     let home = std::env::var("HOME").ok();
@@ -68,7 +68,7 @@ pub fn run(cmd: InitCommands) -> Result<(), color_eyre::Report> {
         }
     }
 
-    println!("installed");
+    eprintln!("info: installed");
 
     Ok(())
 }
@@ -83,7 +83,7 @@ fn sync_managed_dirs(src: &Path, dst: &Path) -> Result<(), color_eyre::Report> {
                 remove_dir_all(&dst_path)?;
             }
             std::fs::rename(&src_path, &dst_path)
-                .map_err(|e| color_eyre::eyre::eyre!("Failed to sync {}: {}", dir_name, e))?;
+                .map_err(|e| color_eyre::eyre::eyre!("failed to sync {}: {}", dir_name, e))?;
         }
     }
     Ok(())
@@ -91,7 +91,7 @@ fn sync_managed_dirs(src: &Path, dst: &Path) -> Result<(), color_eyre::Report> {
 
 fn get_config_dir() -> Result<PathBuf, color_eyre::Report> {
     let home = dirs::home_dir()
-        .ok_or_else(|| color_eyre::eyre::eyre!("Could not determine home directory"))?;
+        .ok_or_else(|| color_eyre::eyre::eyre!("could not determine home directory"))?;
     Ok(home.join(".config/muthr"))
 }
 

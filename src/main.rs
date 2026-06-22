@@ -168,10 +168,10 @@ async fn main() -> color_eyre::Result<()> {
 
 async fn boot(verbose: bool) -> Result<(), color_eyre::Report> {
     if engine::is_running().await {
-        println!("engine already running");
+        eprintln!("info: engine already running");
     } else {
         if verbose {
-            println!("starting inference engine");
+            eprintln!("info: starting inference engine");
         }
         let cfg = config::load()?;
         let server_port = cfg.server_port.unwrap_or(8080);
@@ -191,11 +191,9 @@ async fn boot(verbose: bool) -> Result<(), color_eyre::Report> {
         _ => false,
     };
 
-    if running {
-        // nothing - already running
-    } else {
+    if !running {
         if verbose {
-            println!("starting MCP services VM");
+            eprintln!("info: starting mcp services vm");
         }
         services::start().await?;
     }
@@ -247,10 +245,10 @@ async fn run() -> Result<(), color_eyre::Report> {
                         items.push(format!("  {}) {:<15} {}", items.len() + 1, name, desc));
                     }
                     for item in &items {
-                        println!("{}", item);
+                        eprintln!("{}", item);
                     }
-                    print!("choice ({}-{}) or q: ", 1, items.len());
-                    std::io::Write::flush(&mut std::io::stdout()).ok();
+                    eprint!("choice ({}-{}) or q: ", 1, items.len());
+                    std::io::Write::flush(&mut std::io::stderr()).ok();
 
                     let mut input = String::new();
                     std::io::stdin().read_line(&mut input).ok();
@@ -278,7 +276,7 @@ async fn run() -> Result<(), color_eyre::Report> {
         Some(Commands::Delete { force }) => {
             let (vm_name, _, _) = sandbox::resolve_workspace_context()?;
             if vm_name.is_empty() || vm_name == "muthr-config" {
-                eprintln!("err: must be inside a project directory");
+                eprintln!("error: must be inside a project directory");
                 std::process::exit(1);
             }
             sandbox::delete_vm(&vm_name, force).await?

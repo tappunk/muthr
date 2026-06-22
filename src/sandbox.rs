@@ -70,9 +70,9 @@ pub fn resolve_workspace_context() -> Result<(String, PathBuf, PathBuf), color_e
 
     let workspace_path = PathBuf::from(&workspace_root);
     if !workspace_path.exists() {
-        eprintln!("Error: workspace root '{}' does not exist", workspace_root);
+        eprintln!("error: workspace root '{}' does not exist", workspace_root);
         eprintln!(
-            "Hint: Create it with 'mkdir -p {}' or set MUTHR_WORKSPACE_ROOT.",
+            "info: create it with 'mkdir -p {}' or set MUTHR_WORKSPACE_ROOT",
             workspace_root
         );
         std::process::exit(1);
@@ -176,7 +176,7 @@ pub async fn vm_stop(vm_name: &str) -> Result<(), color_eyre::Report> {
     match output {
         Some(out) if out.status.success() => {}
         _ => {
-            eprintln!("warn: ACPI stop sequence sent");
+            eprintln!("warning: acpi stop sequence sent");
         }
     }
     Ok(())
@@ -189,7 +189,7 @@ pub async fn protect_vm(vm_name: &str) -> Result<(), color_eyre::Report> {
         .await?;
 
     if !status.status.success() {
-        eprintln!("warn: failed to protect VM");
+        eprintln!("warning: failed to protect vm");
     }
     Ok(())
 }
@@ -201,18 +201,18 @@ pub async fn unprotect_vm(vm_name: &str) -> Result<(), color_eyre::Report> {
         .await?;
 
     if !status.status.success() {
-        eprintln!("warn: failed to unprotect VM");
+        eprintln!("warning: failed to unprotect vm");
     }
     Ok(())
 }
 
 pub async fn delete_vm(vm_name: &str, force: bool) -> Result<(), color_eyre::Report> {
     if !force && !std::io::stdout().is_terminal() {
-        eprintln!("err: terminal required for deletion. Use --force to skip.");
+        eprintln!("error: terminal required for deletion, use --force to skip");
         std::process::exit(1);
     }
 
-    println!("deleting VM {}", vm_name);
+    eprintln!("info: deleting vm {}", vm_name);
 
     unprotect_vm(vm_name).await?;
 
@@ -226,7 +226,7 @@ pub async fn delete_vm(vm_name: &str, force: bool) -> Result<(), color_eyre::Rep
         .await?;
 
     if !status.status.success() {
-        return Err(color_eyre::eyre::eyre!("Failed to delete VM '{}'", vm_name));
+        return Err(color_eyre::eyre::eyre!("failed to delete vm '{}'", vm_name));
     }
 
     let cache_dir = std::env::var("HOME")
@@ -239,7 +239,7 @@ pub async fn delete_vm(vm_name: &str, force: bool) -> Result<(), color_eyre::Rep
         fs::remove_file(&profile_cache).await.ok();
     }
 
-    println!("deleted {}", vm_name);
+    eprintln!("info: deleted {}", vm_name);
     Ok(())
 }
 
@@ -257,7 +257,7 @@ pub async fn run_provision(
 
     if !host_script.exists() {
         return Err(color_eyre::eyre::eyre!(
-            "Provision script not found: {:?}",
+            "provision script not found: {:?}",
             host_script
         ));
     }
@@ -266,7 +266,7 @@ pub async fn run_provision(
         .to_str()
         .ok_or_else(|| color_eyre::eyre::eyre!("workspace mount path contains invalid UTF-8"))?;
 
-    println!("provisioning: {}", script_name);
+    eprintln!("info: provisioning: {}", script_name);
     let script_content = fs::read_to_string(&host_script).await?;
     let openai_url = format!("http://host.lima.internal:{}/v1", port);
 
@@ -288,10 +288,10 @@ pub async fn run_provision(
 
     let status = child.wait().await?;
     if !status.success() {
-        return Err(color_eyre::eyre::eyre!("Provision failed: {}", script_name));
+        return Err(color_eyre::eyre::eyre!("provision failed: {}", script_name));
     }
 
-    println!("provisioned: {}", script_name);
+    eprintln!("info: provisioned: {}", script_name);
     Ok(())
 }
 
@@ -316,15 +316,15 @@ async fn wait_for_vm_ready(vm_name: &str) -> Result<(), color_eyre::Report> {
 
 pub async fn up(profile_name: String) -> Result<(), color_eyre::Report> {
     let (vm_name, mount_point, workdir) = resolve_workspace_context()?;
-    println!("target: {}", vm_name);
+    eprintln!("info: target: {}", vm_name);
 
     let home = std::env::var("HOME")?;
     let config_dir = PathBuf::from(&home).join(".config/muthr");
     let manifest_path = crate::catalog::resolve_manifest(&config_dir, &profile_name);
 
     if !manifest_path.exists() {
-        eprintln!("err: manifest not found at {:?}", manifest_path);
-        eprintln!("hint: run 'muthr init'");
+        eprintln!("error: manifest not found at {:?}", manifest_path);
+        eprintln!("info: run 'muthr init'");
         std::process::exit(1);
     }
 
@@ -337,7 +337,7 @@ pub async fn up(profile_name: String) -> Result<(), color_eyre::Report> {
         .replace("__MOUNT_POINT__", mount_str);
 
     if !vm_exists(&vm_name).await {
-        println!("creating VM {}", vm_name);
+        eprintln!("info: creating vm {}", vm_name);
         let mut tmp_yaml = NamedTempFile::new()?;
         tmp_yaml.write_all(expanded.as_bytes())?;
 
@@ -350,7 +350,7 @@ pub async fn up(profile_name: String) -> Result<(), color_eyre::Report> {
             .await?;
 
         if !create_status.success() {
-            return Err(color_eyre::eyre::eyre!("Failed to create VM: {}", vm_name));
+            return Err(color_eyre::eyre::eyre!("failed to create vm: {}", vm_name));
         }
 
         let start_status = Command::new("limactl")
@@ -361,14 +361,14 @@ pub async fn up(profile_name: String) -> Result<(), color_eyre::Report> {
             .await?;
 
         if !start_status.success() {
-            return Err(color_eyre::eyre::eyre!("Failed to start VM: {}", vm_name));
+            return Err(color_eyre::eyre::eyre!("failed to start vm: {}", vm_name));
         }
 
         wait_for_vm_ready(&vm_name).await?;
 
         protect_vm(&vm_name).await?;
     } else if !vm_is_running(&vm_name).await {
-        println!("starting VM {}", vm_name);
+        eprintln!("info: starting vm {}", vm_name);
         let status = Command::new("limactl")
             .args(["start", &vm_name])
             .stdout(Stdio::inherit())
@@ -382,10 +382,9 @@ pub async fn up(profile_name: String) -> Result<(), color_eyre::Report> {
 
         wait_for_vm_ready(&vm_name).await?;
     } else {
-        println!("VM already running");
+        eprintln!("info: vm already running");
     }
 
-    // Poll inference engine for runtime context (needed by provision scripts)
     let cfg = crate::config::load()?;
     let server_port = cfg.server_port.unwrap_or(8080);
     let parsed_model = crate::model::poll_loaded_model("127.0.0.1", server_port, 20, 1.0).await?;
@@ -411,7 +410,7 @@ pub async fn up(profile_name: String) -> Result<(), color_eyre::Report> {
 
         let existing_profiles = fs::read_to_string(&cache_dir).await.unwrap_or_default();
         if !existing_profiles.lines().any(|l| l.trim() == profile_name) {
-            println!("applying profile: {}", profile_name);
+            eprintln!("info: applying profile: {}", profile_name);
             run_provision(
                 &vm_name,
                 &profile_name,
@@ -431,10 +430,10 @@ pub async fn up(profile_name: String) -> Result<(), color_eyre::Report> {
             fs::create_dir_all(cache_dir.parent().unwrap()).await?;
             fs::write(&cache_dir, existing).await?;
         } else {
-            println!("profile '{}' already applied", profile_name);
+            eprintln!("info: profile '{}' already applied", profile_name);
         }
 
-        println!("launching workspace context");
+        eprintln!("info: launching workspace context");
         let target_args = match profile_name.as_str() {
             "opencode" => vec!["opencode"],
             "hermes-agent" => vec!["bash", "-l"],
@@ -460,7 +459,7 @@ pub async fn up(profile_name: String) -> Result<(), color_eyre::Report> {
 
         if !status.success() {
             return Err(color_eyre::eyre::eyre!(
-                "Application session exited with error"
+                "application session exited with error"
             ));
         }
     } else {
@@ -473,7 +472,7 @@ pub async fn up(profile_name: String) -> Result<(), color_eyre::Report> {
             fs::write(&cache_dir, "base\n").await?;
         }
 
-        println!("sandbox ready, launching shell");
+        eprintln!("info: sandbox ready, launching shell");
         let status = Command::new("limactl")
             .args([
                 "--tty",
@@ -487,7 +486,7 @@ pub async fn up(profile_name: String) -> Result<(), color_eyre::Report> {
             .await?;
 
         if !status.success() {
-            return Err(color_eyre::eyre::eyre!("Shell session exited with error"));
+            return Err(color_eyre::eyre::eyre!("shell session exited with error"));
         }
     }
 
@@ -522,7 +521,7 @@ pub async fn list() -> Result<(), color_eyre::Report> {
     };
 
     if vms.is_empty() {
-        println!("no managed VMs");
+        println!("no managed vms");
         return Ok(());
     }
 
@@ -542,11 +541,11 @@ pub async fn list() -> Result<(), color_eyre::Report> {
                         .next()
                         .map(|s| s.to_string())
                 })
-                .unwrap_or_else(|| "Unknown".to_string());
+                .unwrap_or_else(|| "unknown".to_string());
 
             let project = vm.strip_prefix(muthr_prefix).unwrap_or(vm);
             let mount_point = format!("/muthr-{}", project);
-            println!("  {:<30} {}  Mount: {}", vm, status, mount_point);
+            println!("  {:<30} {}  mount: {}", vm, status, mount_point);
         }
     } else {
         let mut rows: Vec<Vec<String>> = Vec::new();
@@ -564,14 +563,14 @@ pub async fn list() -> Result<(), color_eyre::Report> {
                         .next()
                         .map(|s| s.to_string())
                 })
-                .unwrap_or_else(|| "Unknown".to_string());
+                .unwrap_or_else(|| "unknown".to_string());
 
             let project = vm.strip_prefix(muthr_prefix).unwrap_or(vm);
             let mount_point = format!("/muthr-{}", project);
             rows.push(vec![vm.clone(), status, mount_point.to_string()]);
         }
 
-        let headers = vec!["VM Name", "Status", "Mount Point"];
+        let headers = vec!["vm", "status", "mount"];
         crate::ui::select_table(&headers, rows);
     }
 

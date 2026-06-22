@@ -5,12 +5,10 @@ use std::path::PathBuf;
 
 #[derive(Subcommand)]
 pub enum ConfigCommands {
-    /// Initialize a starter muthr.toml configuration file
     Init {
         #[arg(long, help = "Force overwrite existing muthr.toml")]
         force: bool,
     },
-    /// Show the resolved configuration (TOML + env overrides + defaults)
     Show,
 }
 
@@ -100,6 +98,6 @@ default_provision_profile = "base"
 "##;
 
     fs::write(&config_path, template)?;
-    println!("created {}", config_path.display());
+    eprintln!("info: created {}", config_path.display());
     Ok(())
 }

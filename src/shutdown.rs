@@ -40,7 +40,7 @@ async fn is_vm_running(vm_name: &str) -> bool {
 
 async fn stop_vm(name: String, timeout_secs: u64, verbose: bool) {
     if verbose {
-        println!("stopping VM {}", name);
+        eprintln!("info: stopping vm {}", name);
     }
 
     if !is_vm_running(&name).await {
@@ -54,20 +54,20 @@ async fn stop_vm(name: String, timeout_secs: u64, verbose: bool) {
         .await;
 
     if !matches!(status, Ok(s) if s.success()) {
-        eprintln!("warn: failed to stop VM {}", name);
+        eprintln!("warning: failed to stop vm {}", name);
     }
 
     let start = std::time::Instant::now();
     while start.elapsed().as_secs() < timeout_secs {
         if !is_vm_running(&name).await {
-            println!("stopped {}", name);
+            eprintln!("info: stopped {}", name);
             return;
         }
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }
 
     eprintln!(
-        "warn: {} timed out after {}s, force stopping",
+        "warning: {} timed out after {}s, force stopping",
         name, timeout_secs
     );
     let _ = AsyncCommand::new("limactl")
@@ -83,7 +83,7 @@ pub async fn run(verbose: bool, timeout_secs: Option<u64>) {
     let timeout = timeout_secs.unwrap_or(default_timeout);
 
     if verbose {
-        println!("scanning VMs");
+        eprintln!("info: scanning vms");
     }
 
     let sandboxes = discover_sandbox_vms().await;
@@ -95,11 +95,11 @@ pub async fn run(verbose: bool, timeout_secs: Option<u64>) {
     stop_vm("muthr-services".to_string(), timeout, verbose).await;
 
     if verbose {
-        println!("stopping inference engine");
+        eprintln!("info: stopping inference engine");
     }
     let _ = engine::stop().await;
 
     if verbose {
-        println!("shutdown complete");
+        eprintln!("info: shutdown complete");
     }
 }

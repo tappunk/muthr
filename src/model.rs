@@ -62,13 +62,13 @@ pub async fn poll_loaded_model(
         }
 
         if i % 5 == 0 {
-            eprintln!("waiting for loaded model ({}/{})", i, max_retries);
+            eprintln!("info: waiting for loaded model ({}/{})", i, max_retries);
         }
 
         tokio::time::sleep(Duration::from_secs_f32(interval_secs)).await;
     }
 
     Err(color_eyre::eyre::eyre!(
-        "Timeout: Could not get loaded model from llama-server"
+        "timeout: could not get loaded model from llama-server"
     ))
 }

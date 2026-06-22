@@ -54,12 +54,12 @@ fn parse_slot_section(
 
     let name = name.trim().to_string();
     if name.is_empty() {
-        return Err(color_eyre::eyre::eyre!("Slot section has no name"));
+        return Err(color_eyre::eyre::eyre!("slot section has no name"));
     }
 
     let index = index_str
         .parse()
-        .map_err(|_| color_eyre::eyre::eyre!("Invalid slot index: {}", index_str))?;
+        .map_err(|_| color_eyre::eyre::eyre!("invalid slot index: {}", index_str))?;
 
     let load_on_startup = values
         .get("load-on-startup")
@@ -123,7 +123,7 @@ pub fn parse_preset(path: &Path) -> Result<Preset, color_eyre::Report> {
     let name = path
         .file_stem()
         .and_then(|s| s.to_str())
-        .ok_or_else(|| color_eyre::eyre::eyre!("Invalid preset filename"))?
+        .ok_or_else(|| color_eyre::eyre::eyre!("invalid preset filename"))?
         .to_string();
 
     let content = fs::read_to_string(path)?;
@@ -194,7 +194,7 @@ pub fn list_presets() -> Result<Vec<Preset>, color_eyre::Report> {
         if path.extension().is_some_and(|ext| ext == "ini") {
             match parse_preset(&path) {
                 Ok(preset) => presets.push(preset),
-                Err(e) => eprintln!("[WARN] Failed to parse {:?}: {}", path, e),
+                Err(e) => eprintln!("warning: failed to parse {:?}: {}", path, e),
             }
         }
     }

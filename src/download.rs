@@ -12,13 +12,13 @@ pub async fn download(source: &str, file: Option<&str>) -> Result<(), color_eyre
         }
         (repo, Some(file)) => (repo.to_string(), "main".to_string(), file.to_string()),
         _ => {
-            eprintln!("err: muthr download <hf-repo> <filename> | <hf-url>");
+            eprintln!("error: muthr download <hf-repo> <filename> | <hf-url>");
             return Ok(());
         }
     };
 
     if !filename.ends_with(".gguf") {
-        eprintln!("err: expected .gguf file");
+        eprintln!("error: expected .gguf file");
         return Ok(());
     }
 
@@ -46,11 +46,11 @@ pub async fn download(source: &str, file: Option<&str>) -> Result<(), color_eyre
     fs::create_dir_all(&model_subdir).await?;
 
     if target_path.exists() {
-        eprintln!("warn: file exists, aborting to prevent overwrite");
+        eprintln!("warning: file exists, aborting to prevent overwrite");
         return Ok(());
     }
 
-    println!("fetching {}", filename);
+    eprintln!("info: fetching {}", filename);
 
     let mut headers = reqwest::header::HeaderMap::new();
     if let Ok(token) = std::env::var("HF_TOKEN") {
@@ -66,7 +66,7 @@ pub async fn download(source: &str, file: Option<&str>) -> Result<(), color_eyre
 
     if !response.status().is_success() {
         return Err(color_eyre::eyre::eyre!(
-            "Download failed: {}",
+            "download failed: {}",
             response.status()
         ));
     }
@@ -87,13 +87,17 @@ pub async fn download(source: &str, file: Option<&str>) -> Result<(), color_eyre
         pb.inc(chunk.len() as u64);
     }
 
-    pb.finish_with_message("Downloaded");
+    pb.finish_with_message("downloaded");
     fs::rename(&tmp_file, &target_path).await?;
 
     if let Ok(metadata) = fs::metadata(&target_path).await {
-        println!("done {} ({} bytes)", target_path.display(), metadata.len());
+        eprintln!(
+            "info: done {} ({} bytes)",
+            target_path.display(),
+            metadata.len()
+        );
     } else {
-        println!("done");
+        eprintln!("info: done");
     }
 
     Ok(())
@@ -106,10 +110,10 @@ fn parse_hf_url(url: &str) -> Result<(String, String, String), color_eyre::Repor
     let tmp = tmp
         .split(['?', '#'])
         .next()
-        .ok_or_else(|| color_eyre::eyre::eyre!("Invalid HuggingFace URL"))?;
+        .ok_or_else(|| color_eyre::eyre::eyre!("invalid huggingface url"))?;
     let tmp = tmp
         .strip_prefix("huggingface.co/")
-        .ok_or_else(|| color_eyre::eyre::eyre!("Invalid HuggingFace URL format"))?;
+        .ok_or_else(|| color_eyre::eyre::eyre!("invalid huggingface url format"))?;
 
     let parts: Vec<&str> = tmp.split('/').filter(|p| !p.is_empty()).collect();
     let marker_idx = parts
@@ -117,27 +121,27 @@ fn parse_hf_url(url: &str) -> Result<(String, String, String), color_eyre::Repor
         .position(|p| *p == "resolve" || *p == "blob")
         .ok_or_else(|| {
             color_eyre::eyre::eyre!(
-                "Invalid HuggingFace URL — expected /<repo>/resolve/<revision>/<filename>"
+                "invalid huggingface url, expected /<repo>/resolve/<revision>/<filename>"
             )
         })?;
 
     if marker_idx < 2 {
         return Err(color_eyre::eyre::eyre!(
-            "Invalid HuggingFace repository path"
+            "invalid huggingface repository path"
         ));
     }
 
     let repo = parts[..marker_idx].join("/");
     let revision = parts
         .get(marker_idx + 1)
-        .ok_or_else(|| color_eyre::eyre::eyre!("Missing revision in HuggingFace URL"))?;
+        .ok_or_else(|| color_eyre::eyre::eyre!("missing revision in huggingface url"))?;
     let filename = parts
         .get(marker_idx + 2..)
         .map(|slice| slice.join("/"))
-        .ok_or_else(|| color_eyre::eyre::eyre!("Missing filename in HuggingFace URL"))?;
+        .ok_or_else(|| color_eyre::eyre::eyre!("missing filename in huggingface url"))?;
 
     if filename.is_empty() {
-        return Err(color_eyre::eyre::eyre!("Missing filename in URL"));
+        return Err(color_eyre::eyre::eyre!("missing filename in url"));
     }
 
     Ok((repo, revision.to_string(), filename))
