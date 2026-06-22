@@ -39,13 +39,8 @@ pub fn run(cmd: InitCommands) -> Result<(), color_eyre::Report> {
     println!("cloning muthr-specs into {}", tmp_dir.display());
 
     let status = Command::new("git")
-        .args([
-            "clone",
-            "--depth",
-            "1",
-            &repo_url,
-            tmp_dir.to_str().unwrap(),
-        ])
+        .args(["clone", "--depth", "1", &repo_url])
+        .arg(&tmp_dir)
         .status()?;
 
     if !status.success() {

@@ -6,11 +6,11 @@ use tokio::io::AsyncWriteExt;
 use crate::config;
 
 pub async fn download(source: &str, file: Option<&str>) -> Result<(), color_eyre::Report> {
-    let (repo, filename) = match (source, file) {
+    let (repo, revision, filename) = match (source, file) {
         (url, None) if url.starts_with("http") && url.contains("huggingface.co") => {
             parse_hf_url(url)?
         }
-        (repo, Some(file)) => (repo.to_string(), file.to_string()),
+        (repo, Some(file)) => (repo.to_string(), "main".to_string(), file.to_string()),
         _ => {
             eprintln!("err: muthr download <hf-repo> <filename> | <hf-url>");
             return Ok(());
@@ -38,7 +38,10 @@ pub async fn download(source: &str, file: Option<&str>) -> Result<(), color_eyre
 
     let model_subdir = PathBuf::from(&model_dir).join(&repo);
     let target_path = model_subdir.join(&filename);
-    let url = format!("https://huggingface.co/{}/resolve/main/{}", repo, filename);
+    let url = format!(
+        "https://huggingface.co/{}/resolve/{}/{}",
+        repo, revision, filename
+    );
 
     fs::create_dir_all(&model_subdir).await?;
 
@@ -96,26 +99,46 @@ pub async fn download(source: &str, file: Option<&str>) -> Result<(), color_eyre
     Ok(())
 }
 
-fn parse_hf_url(url: &str) -> Result<(String, String), color_eyre::Report> {
+fn parse_hf_url(url: &str) -> Result<(String, String, String), color_eyre::Report> {
     let tmp = url
         .trim_start_matches("https://")
         .trim_start_matches("http://");
     let tmp = tmp
+        .split(['?', '#'])
+        .next()
+        .ok_or_else(|| color_eyre::eyre::eyre!("Invalid HuggingFace URL"))?;
+    let tmp = tmp
         .strip_prefix("huggingface.co/")
         .ok_or_else(|| color_eyre::eyre::eyre!("Invalid HuggingFace URL format"))?;
 
-    let mut parts = tmp.splitn(3, '/');
-    let repo = parts
-        .next()
-        .ok_or_else(|| color_eyre::eyre::eyre!("Invalid HuggingFace URL"))?;
-    let _rev_or_blob = parts.next();
-    let filename = parts.next().ok_or_else(|| {
-        color_eyre::eyre::eyre!("Invalid HuggingFace URL — expected repo/blob/revision/filename")
-    })?;
+    let parts: Vec<&str> = tmp.split('/').filter(|p| !p.is_empty()).collect();
+    let marker_idx = parts
+        .iter()
+        .position(|p| *p == "resolve" || *p == "blob")
+        .ok_or_else(|| {
+            color_eyre::eyre::eyre!(
+                "Invalid HuggingFace URL — expected /<repo>/resolve/<revision>/<filename>"
+            )
+        })?;
+
+    if marker_idx < 2 {
+        return Err(color_eyre::eyre::eyre!(
+            "Invalid HuggingFace repository path"
+        ));
+    }
+
+    let repo = parts[..marker_idx].join("/");
+    let revision = parts
+        .get(marker_idx + 1)
+        .ok_or_else(|| color_eyre::eyre::eyre!("Missing revision in HuggingFace URL"))?;
+    let filename = parts
+        .get(marker_idx + 2..)
+        .map(|slice| slice.join("/"))
+        .ok_or_else(|| color_eyre::eyre::eyre!("Missing filename in HuggingFace URL"))?;
 
     if filename.is_empty() {
         return Err(color_eyre::eyre::eyre!("Missing filename in URL"));
     }
 
-    Ok((repo.to_string(), filename.to_string()))
+    Ok((repo, revision.to_string(), filename))
 }

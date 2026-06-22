@@ -364,13 +364,7 @@ pub async fn status() -> Result<(), color_eyre::Report> {
         .map(|s| s.trim().to_string())
         .unwrap_or_default();
 
-    let is_server_running = AsyncCommand::new("pgrep")
-        .arg("-x")
-        .arg("llama-server")
-        .output()
-        .await?
-        .status
-        .success();
+    let is_server_running = is_running().await;
 
     if preset_name.is_empty() {
         println!("muthr: not configured");
@@ -534,14 +528,30 @@ async fn apply_vram_limits(_foreground: bool) {
             }
         };
 
+        let stdin_tty = match tty.try_clone() {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!("warn: cannot clone /dev/tty for sudo stdin: {}", e);
+                return;
+            }
+        };
+
+        let stdout_tty = match tty.try_clone() {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!("warn: cannot clone /dev/tty for sudo stdout: {}", e);
+                return;
+            }
+        };
+
         let status = AsyncCommand::new("sudo")
             .args([
                 "sysctl",
                 "-w",
                 &format!("iogpu.wired_limit_mb={}", wired_mb),
             ])
-            .stdin(tty.try_clone().unwrap())
-            .stdout(tty.try_clone().unwrap())
+            .stdin(stdin_tty)
+            .stdout(stdout_tty)
             .stderr(tty)
             .status()
             .await;
