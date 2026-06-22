@@ -1,4 +1,4 @@
-![muthr](https://raw.githubusercontent.com/tappunk/.github/refs/heads/main/assets/muthr-banner.webp)
+![muthr](https://raw.githubusercontent.com/tappunk/.github/refs/heads/main/assets/muthr.webp)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Crates.io Version](https://img.shields.io/crates/v/muthr?color=orange&cacheSeconds=3600)](https://crates.io/crates/muthr)
