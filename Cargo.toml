@@ -32,6 +32,7 @@ glob = "=0.3.3"
 tempfile = "=3.27.0"
 libc = "=0.2.186"
 dirs = "=6.0.0"
+serde_yaml = "=0.9.34"
 
 [profile.release]
 opt-level = 3

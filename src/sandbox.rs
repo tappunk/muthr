@@ -1,3 +1,4 @@
+use serde_yaml::Value;
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -5,6 +6,48 @@ use tempfile::NamedTempFile;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
+
+fn parse_manifest_yaml(content: &str) -> Result<Value, color_eyre::Report> {
+    serde_yaml::from_str(content)
+        .map_err(|e| color_eyre::eyre::eyre!("invalid manifest yaml: {}", e))
+}
+
+fn map_get_mut<'a>(value: &'a mut Value, key: &str) -> Option<&'a mut Value> {
+    value
+        .as_mapping_mut()
+        .and_then(|m| m.get_mut(Value::String(key.to_string())))
+}
+
+fn update_mount_placeholders(doc: &mut Value, mount_str: &str) {
+    let Some(mounts) = map_get_mut(doc, "mounts").and_then(Value::as_sequence_mut) else {
+        return;
+    };
+
+    for mount in mounts {
+        let Some(mount_map) = mount.as_mapping_mut() else {
+            continue;
+        };
+
+        let location_key = Value::String("location".to_string());
+        if let Some(location_value) = mount_map.get_mut(&location_key)
+            && location_value.as_str() == Some("__WORKSPACE_ROOT__")
+        {
+            *location_value = Value::String(mount_str.to_string());
+        }
+
+        let mount_point_key = Value::String("mountPoint".to_string());
+        if let Some(mount_point_value) = mount_map.get_mut(&mount_point_key)
+            && mount_point_value.as_str() == Some("__MOUNT_POINT__")
+        {
+            *mount_point_value = Value::String(mount_str.to_string());
+        }
+    }
+}
+
+fn serialize_manifest_yaml(doc: &Value) -> Result<String, color_eyre::Report> {
+    serde_yaml::to_string(doc)
+        .map_err(|e| color_eyre::eyre::eyre!("failed to serialize manifest yaml: {}", e))
+}
 
 fn sanitize_project_name(name: &str) -> Option<String> {
     let sanitized: String = name
@@ -344,9 +387,9 @@ pub async fn up(profile_name: String) -> Result<(), color_eyre::Report> {
     let mount_str = mount_point
         .to_str()
         .ok_or_else(|| color_eyre::eyre::eyre!("workspace path contains invalid UTF-8"))?;
-    let expanded = content
-        .replace("__WORKSPACE_ROOT__", mount_str)
-        .replace("__MOUNT_POINT__", mount_str);
+    let mut manifest_doc = parse_manifest_yaml(&content)?;
+    update_mount_placeholders(&mut manifest_doc, mount_str);
+    let expanded = serialize_manifest_yaml(&manifest_doc)?;
 
     if !vm_exists(&vm_name).await {
         eprintln!("info: creating vm {}", vm_name);
