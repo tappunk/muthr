@@ -1,4 +1,4 @@
-use serde_yaml::Value;
+use serde::{Deserialize, Serialize};
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -7,45 +7,104 @@ use tokio::fs;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
-fn parse_manifest_yaml(content: &str) -> Result<Value, color_eyre::Report> {
+const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LimaManifest {
+    minimum_lima_version: String,
+    vm_type: String,
+    mount_type: String,
+    images: Vec<LimaImage>,
+    cpus: Option<u32>,
+    memory: Option<String>,
+    disk: Option<String>,
+    mounts: Option<Vec<LimaMount>>,
+    upgrade_packages: Option<bool>,
+    containerd: Option<LimaContainerd>,
+    ssh: Option<LimaSsh>,
+    host_resolver: Option<LimaHostResolver>,
+    provision: Option<Vec<LimaProvision>>,
+    port_forwards: Option<Vec<LimaPortForward>>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct LimaImage {
+    location: String,
+    arch: String,
+    digest: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LimaMount {
+    location: String,
+    mount_point: String,
+    writable: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct LimaContainerd {
+    user: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LimaSsh {
+    forward_agent: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LimaHostResolver {
+    enabled: Option<bool>,
+    ipv6: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct LimaProvision {
+    mode: String,
+    script: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LimaPortForward {
+    guest_port: u16,
+    host_port: u16,
+}
+
+fn parse_manifest_yaml(content: &str) -> Result<LimaManifest, color_eyre::Report> {
+    if content.len() > MAX_MANIFEST_BYTES {
+        return Err(color_eyre::eyre::eyre!(
+            "manifest exceeds max size: {} bytes",
+            MAX_MANIFEST_BYTES
+        ));
+    }
+
     serde_yaml::from_str(content)
         .map_err(|e| color_eyre::eyre::eyre!("invalid manifest yaml: {}", e))
 }
 
-fn map_get_mut<'a>(value: &'a mut Value, key: &str) -> Option<&'a mut Value> {
-    value
-        .as_mapping_mut()
-        .and_then(|m| m.get_mut(Value::String(key.to_string())))
-}
+fn update_mount_placeholders(manifest: &mut LimaManifest, mount_str: &str) {
+    if let Some(mounts) = manifest.mounts.as_mut() {
+        for mount in mounts {
+            if mount.location == "__WORKSPACE_ROOT__" {
+                mount.location = mount_str.to_string();
+            }
 
-fn update_mount_placeholders(doc: &mut Value, mount_str: &str) {
-    let Some(mounts) = map_get_mut(doc, "mounts").and_then(Value::as_sequence_mut) else {
-        return;
-    };
-
-    for mount in mounts {
-        let Some(mount_map) = mount.as_mapping_mut() else {
-            continue;
-        };
-
-        let location_key = Value::String("location".to_string());
-        if let Some(location_value) = mount_map.get_mut(&location_key)
-            && location_value.as_str() == Some("__WORKSPACE_ROOT__")
-        {
-            *location_value = Value::String(mount_str.to_string());
-        }
-
-        let mount_point_key = Value::String("mountPoint".to_string());
-        if let Some(mount_point_value) = mount_map.get_mut(&mount_point_key)
-            && mount_point_value.as_str() == Some("__MOUNT_POINT__")
-        {
-            *mount_point_value = Value::String(mount_str.to_string());
+            if mount.mount_point == "__MOUNT_POINT__" {
+                mount.mount_point = mount_str.to_string();
+            }
         }
     }
 }
 
-fn serialize_manifest_yaml(doc: &Value) -> Result<String, color_eyre::Report> {
-    serde_yaml::to_string(doc)
+fn serialize_manifest_yaml(manifest: &LimaManifest) -> Result<String, color_eyre::Report> {
+    serde_yaml::to_string(manifest)
         .map_err(|e| color_eyre::eyre::eyre!("failed to serialize manifest yaml: {}", e))
 }
 
@@ -387,7 +446,13 @@ pub async fn up(profile_name: String) -> Result<(), color_eyre::Report> {
     let mount_str = mount_point
         .to_str()
         .ok_or_else(|| color_eyre::eyre::eyre!("workspace path contains invalid UTF-8"))?;
-    let mut manifest_doc = parse_manifest_yaml(&content)?;
+    let mut manifest_doc = parse_manifest_yaml(&content).map_err(|e| {
+        color_eyre::eyre::eyre!(
+            "failed to parse manifest '{}': {}",
+            manifest_path.display(),
+            e
+        )
+    })?;
     update_mount_placeholders(&mut manifest_doc, mount_str);
     let expanded = serialize_manifest_yaml(&manifest_doc)?;
 

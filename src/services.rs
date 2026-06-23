@@ -250,12 +250,6 @@ pub async fn delete(force: bool) -> Result<(), color_eyre::Report> {
         return Err(color_eyre::eyre::eyre!("failed to delete mcp services vm"));
     }
 
-    let home = std::env::var("HOME")?;
-    let cache_file = PathBuf::from(&home).join(".cache/muthr/services-profiles");
-    if cache_file.exists() {
-        fs::remove_file(&cache_file)?;
-    }
-
     eprintln!("info: deleted {}", vm_name);
     Ok(())
 }
