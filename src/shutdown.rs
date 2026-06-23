@@ -1,6 +1,7 @@
 use tokio::process::Command as AsyncCommand;
 
 use crate::engine;
+use crate::sandbox;
 
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
 
@@ -22,60 +23,19 @@ async fn discover_sandbox_vms() -> Vec<String> {
     }
 }
 
-async fn is_vm_running(vm_name: &str) -> bool {
-    let output = AsyncCommand::new("limactl")
-        .args(["ls", "-f", "{{.Status}}", vm_name])
-        .output()
-        .await
-        .ok();
-
-    match output {
-        Some(out) if out.status.success() => {
-            let status = String::from_utf8_lossy(&out.stdout);
-            status.contains("Running")
-        }
-        _ => false,
-    }
-}
-
 async fn stop_vm(name: String, timeout_secs: u64, verbose: bool) {
     if verbose {
         eprintln!("info: stopping vm {}", name);
     }
 
-    if !is_vm_running(&name).await {
-        return;
-    }
-
-    let status = AsyncCommand::new("limactl")
-        .arg("stop")
-        .arg(&name)
-        .status()
-        .await;
-
-    if !matches!(status, Ok(s) if s.success()) {
-        eprintln!("warning: failed to stop vm {}", name);
-    }
-
-    let start = std::time::Instant::now();
-    while start.elapsed().as_secs() < timeout_secs {
-        if !is_vm_running(&name).await {
-            eprintln!("info: stopped {}", name);
-            return;
+    match sandbox::stop_vm_with_timeout(&name, timeout_secs).await {
+        Ok(true) => eprintln!("info: stopped {}", name),
+        Ok(false) => eprintln!("info: already stopped {}", name),
+        Err(e) => {
+            eprintln!("warning: failed to stop vm {}", name);
+            eprintln!("warning: {}", e);
         }
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }
-
-    eprintln!(
-        "warning: {} timed out after {}s, force stopping",
-        name, timeout_secs
-    );
-    let _ = AsyncCommand::new("limactl")
-        .args(["stop", "--force", &name])
-        .status()
-        .await;
-
-    tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
 }
 
 pub async fn run(verbose: bool, timeout_secs: Option<u64>) {

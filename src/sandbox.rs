@@ -267,20 +267,65 @@ pub async fn vm_is_running(vm_name: &str) -> bool {
     false
 }
 
-pub async fn vm_stop(vm_name: &str) -> Result<(), color_eyre::Report> {
-    let output = Command::new("limactl")
-        .arg("stop")
-        .arg(vm_name)
-        .output()
-        .await
-        .ok();
+pub async fn stop_vm_with_timeout(
+    vm_name: &str,
+    timeout_secs: u64,
+) -> Result<bool, color_eyre::Report> {
+    if !vm_is_running(vm_name).await {
+        return Ok(false);
+    }
 
-    match output {
-        Some(out) if out.status.success() => {}
-        _ => {
-            eprintln!("warning: acpi stop sequence sent");
+    let status = Command::new("limactl")
+        .args(["stop", vm_name])
+        .status()
+        .await;
+
+    if !matches!(status, Ok(s) if s.success()) {
+        eprintln!("warning: failed to stop vm {}, forcing stop", vm_name);
+        let force_status = Command::new("limactl")
+            .args(["stop", "--force", vm_name])
+            .status()
+            .await?;
+        if !force_status.success() {
+            return Err(color_eyre::eyre::eyre!(
+                "failed to force stop vm '{}'",
+                vm_name
+            ));
         }
     }
+
+    let start = std::time::Instant::now();
+    while start.elapsed().as_secs() < timeout_secs {
+        if !vm_is_running(vm_name).await {
+            return Ok(true);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+
+    eprintln!(
+        "warning: {} timed out after {}s, forcing stop",
+        vm_name, timeout_secs
+    );
+    let force_status = Command::new("limactl")
+        .args(["stop", "--force", vm_name])
+        .status()
+        .await?;
+    if !force_status.success() {
+        return Err(color_eyre::eyre::eyre!(
+            "failed to force stop vm '{}'",
+            vm_name
+        ));
+    }
+
+    if vm_is_running(vm_name).await {
+        return Err(color_eyre::eyre::eyre!("vm '{}' is still running", vm_name));
+    }
+
+    Ok(true)
+}
+
+pub async fn vm_stop(vm_name: &str) -> Result<(), color_eyre::Report> {
+    let _ = stop_vm_with_timeout(vm_name, 30).await?;
     Ok(())
 }
 
@@ -618,7 +663,12 @@ pub async fn down() -> Result<(), color_eyre::Report> {
     if !vm_exists(&vm_name).await {
         return Ok(());
     }
-    vm_stop(&vm_name).await?;
+    let was_running = stop_vm_with_timeout(&vm_name, 30).await?;
+    if !was_running {
+        eprintln!("info: already stopped {}", vm_name);
+        return Ok(());
+    }
+    eprintln!("info: stopped {}", vm_name);
     Ok(())
 }
 
