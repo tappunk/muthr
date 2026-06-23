@@ -425,7 +425,7 @@ pub async fn status() -> Result<(), color_eyre::Report> {
     };
 
     if let Some(status) = services_status {
-        println!("  mcp services     {}     {}", services_vm, status);
+        println!("  services vm      {}     {}", services_vm, status);
 
         let provision_output = AsyncCommand::new("limactl")
             .args([

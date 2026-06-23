@@ -79,20 +79,20 @@ enum Commands {
     #[command(about = "List all managed sandbox VMs")]
     Ls,
 
-    #[command(about = "Manage the persistent MCP services VM")]
+    #[command(about = "Manage the persistent muthr-services VM")]
     Services {
         #[command(subcommand)]
         action: ServicesCommands,
     },
 
-    #[command(about = "Full stack startup: inference engine + MCP services VM")]
+    #[command(about = "Full stack startup: inference engine + muthr-services VM")]
     Boot {
         #[arg(long, help = "Show detailed progress output during boot")]
         verbose: bool,
     },
 
     #[command(
-        about = "Graceful shutdown of all owned components: sandboxes, MCP services VM, and inference engine"
+        about = "Graceful shutdown of all owned components: sandboxes, muthr-services VM, and inference engine"
     )]
     Shutdown {
         #[arg(long, help = "Show detailed progress output during shutdown")]
@@ -145,15 +145,15 @@ enum Commands {
 
 #[derive(Subcommand)]
 pub enum ServicesCommands {
-    #[command(about = "Start the MCP services VM")]
+    #[command(about = "Start the muthr-services VM")]
     Start,
-    #[command(about = "Stop the MCP services VM")]
+    #[command(about = "Stop the muthr-services VM")]
     Stop,
-    #[command(about = "Show the MCP services VM execution status")]
+    #[command(about = "Show the muthr-services VM execution status")]
     Status,
-    #[command(about = "Restart the MCP services VM execution context")]
+    #[command(about = "Restart the muthr-services VM execution context")]
     Restart,
-    #[command(about = "Delete the MCP services VM")]
+    #[command(about = "Delete the muthr-services VM")]
     Delete {
         #[arg(long, help = "Skip confirmation prompt")]
         force: bool,
@@ -193,7 +193,7 @@ async fn boot(verbose: bool) -> Result<(), color_eyre::Report> {
 
     if !running {
         if verbose {
-            eprintln!("info: starting mcp services vm");
+            eprintln!("info: starting muthr-services vm");
         }
         services::start().await?;
     }
@@ -238,7 +238,7 @@ async fn run() -> Result<(), color_eyre::Report> {
                     for name in &all_profiles {
                         let desc = match *name {
                             "base" => "Minimal VM — drops into shell",
-                            "opencode" => "Opencode AI — fully configured with MCP services",
+                            "opencode" => "Opencode AI — fully configured with muthr-services",
                             "hermes-agent" => "Hermes Agent — drops into shell after install",
                             _ => "",
                         };

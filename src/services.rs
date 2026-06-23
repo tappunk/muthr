@@ -22,7 +22,7 @@ pub async fn start() -> Result<(), color_eyre::Report> {
 
     if !is_vm_running(vm_name) {
         if !is_vm_exists(vm_name) {
-            eprintln!("info: creating mcp-services vm");
+            eprintln!("info: creating muthr-services vm");
 
             if !template_path.exists() {
                 return Err(color_eyre::eyre::eyre!(
@@ -43,7 +43,9 @@ pub async fn start() -> Result<(), color_eyre::Report> {
                 .status()?;
 
             if !create_status.success() {
-                return Err(color_eyre::eyre::eyre!("failed to create mcp vm"));
+                return Err(color_eyre::eyre::eyre!(
+                    "failed to create muthr-services vm"
+                ));
             }
 
             let start_status = Command::new("limactl")
@@ -53,10 +55,10 @@ pub async fn start() -> Result<(), color_eyre::Report> {
                 .status()?;
 
             if !start_status.success() {
-                return Err(color_eyre::eyre::eyre!("failed to start mcp vm"));
+                return Err(color_eyre::eyre::eyre!("failed to start muthr-services vm"));
             }
         } else {
-            eprintln!("info: starting mcp-services vm");
+            eprintln!("info: starting muthr-services vm");
             let status = Command::new("limactl")
                 .args(["start", vm_name])
                 .stdout(Stdio::inherit())
@@ -64,11 +66,11 @@ pub async fn start() -> Result<(), color_eyre::Report> {
                 .status()?;
 
             if !status.success() {
-                return Err(color_eyre::eyre::eyre!("failed to start mcp vm"));
+                return Err(color_eyre::eyre::eyre!("failed to start muthr-services vm"));
             }
         }
     } else {
-        eprintln!("info: mcp-services vm already running");
+        eprintln!("info: muthr-services vm already running");
         return Ok(());
     }
 
@@ -94,9 +96,11 @@ pub async fn start() -> Result<(), color_eyre::Report> {
             .status()?;
 
         if provision_status.success() {
-            eprintln!("info: mcp services provisioned");
+            eprintln!("info: muthr-services vm provisioned");
         } else {
-            return Err(color_eyre::eyre::eyre!("mcp services provisioning failed"));
+            return Err(color_eyre::eyre::eyre!(
+                "muthr-services vm provisioning failed"
+            ));
         }
     }
 
@@ -152,7 +156,7 @@ pub async fn status() -> Result<(), color_eyre::Report> {
         })
         .unwrap_or_else(|| "unknown".to_string());
 
-    println!("mcp services: {}", status.to_lowercase());
+    println!("muthr-services vm: {}", status.to_lowercase());
 
     Ok(())
 }
@@ -228,7 +232,7 @@ pub async fn delete(force: bool) -> Result<(), color_eyre::Report> {
         std::process::exit(1);
     }
 
-    eprintln!("info: deleting mcp-services vm");
+    eprintln!("info: deleting muthr-services vm");
 
     let unprotect_status = Command::new("limactl")
         .args(["unprotect", vm_name])
@@ -247,7 +251,9 @@ pub async fn delete(force: bool) -> Result<(), color_eyre::Report> {
     let delete_status = Command::new("limactl").args(["delete", vm_name]).output()?;
 
     if !delete_status.status.success() {
-        return Err(color_eyre::eyre::eyre!("failed to delete mcp services vm"));
+        return Err(color_eyre::eyre::eyre!(
+            "failed to delete muthr-services vm"
+        ));
     }
 
     eprintln!("info: deleted {}", vm_name);

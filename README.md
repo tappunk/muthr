@@ -38,13 +38,13 @@ muthr ls                 # List all managed sandbox VMs
 muthr down               # Stop the current sandbox
 muthr delete             # Delete the active sandbox VM
 
-muthr services start     # Launch MCP services VM
+muthr services start     # Launch muthr-services VM
 muthr services status
 muthr services stop
-muthr services restart   # Restart the MCP services VM
-muthr services delete    # Delete the MCP services VM
+muthr services restart   # Restart the muthr-services VM
+muthr services delete    # Delete the muthr-services VM
 
-muthr boot               # Full stack startup: inference engine + MCP services VM
+muthr boot               # Full stack startup: inference engine + muthr-services VM
 muthr shutdown           # Graceful shutdown of all owned components
 
 muthr config init        # Create muthr.toml config file
