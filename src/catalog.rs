@@ -22,8 +22,8 @@ pub fn list_profiles(config_dir: &Path) -> Result<Vec<Profile>, color_eyre::Repo
                     .unwrap_or_default()
                     .to_string();
                 profiles.push(Profile {
+                    manifest_path: resolve_manifest(config_dir, &name),
                     name,
-                    manifest_path: config_dir.join("base-sandbox.yaml"),
                 });
             }
         }
