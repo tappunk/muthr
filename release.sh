@@ -220,6 +220,26 @@ EOF
 )
 rm -rf "$TAP_DIR"
 
+echo "[PROC] Synchronizing local Homebrew tap mirror..."
+LOCAL_TAP_DIR="${HOME}/src/homebrew-muthr"
+if [[ ! -d "${LOCAL_TAP_DIR}/.git" ]]; then
+  echo "[WARN] Skipping local tap sync. Repository not found at ${LOCAL_TAP_DIR}."
+elif [[ -n $(git -C "${LOCAL_TAP_DIR}" status --porcelain) ]]; then
+  echo "[WARN] Skipping local tap sync. Uncommitted changes in ${LOCAL_TAP_DIR}."
+elif [[ $(git -C "${LOCAL_TAP_DIR}" branch --show-current) != "main" ]]; then
+  echo "[WARN] Skipping local tap sync. ${LOCAL_TAP_DIR} is not on 'main'."
+elif ! git -C "${LOCAL_TAP_DIR}" fetch origin >/dev/null 2>&1; then
+  echo "[WARN] Skipping local tap sync. Failed to fetch origin in ${LOCAL_TAP_DIR}."
+elif [[ -n $(git -C "${LOCAL_TAP_DIR}" log HEAD..origin/main --oneline) ]]; then
+  if git -C "${LOCAL_TAP_DIR}" pull --ff-only >/dev/null 2>&1; then
+    echo "[PROC] Local tap mirror synchronized: ${LOCAL_TAP_DIR}"
+  else
+    echo "[WARN] Skipping local tap sync. Fast-forward pull failed in ${LOCAL_TAP_DIR}."
+  fi
+else
+  echo "[PROC] Local tap mirror already up to date: ${LOCAL_TAP_DIR}"
+fi
+
 echo "[PROC] Cleaning up local packaging assets..."
 rm -f "$ARCHIVE_NAME" "$CHECKSUM_NAME"
 
