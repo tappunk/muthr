@@ -223,8 +223,8 @@ async fn run() -> Result<(), color_eyre::Report> {
             let config_dir = std::path::PathBuf::from(&home).join(".config/muthr");
 
             let profiles = catalog::list_profiles(&config_dir)?;
-            let all_profiles: Vec<&str> = std::iter::once("base")
-                .chain(profiles.iter().map(|p| p.name.as_str()))
+            let all_profiles: Vec<String> = std::iter::once("base".to_string())
+                .chain(profiles.iter().map(|p| p.name.clone()))
                 .collect();
 
             let (vm_name, _, _) = sandbox::resolve_workspace_context()?;
@@ -236,7 +236,7 @@ async fn run() -> Result<(), color_eyre::Report> {
                 None => {
                     let mut items: Vec<String> = Vec::new();
                     for name in &all_profiles {
-                        let desc = match *name {
+                        let desc = match name.as_str() {
                             "base" => "Minimal VM — drops into shell",
                             "opencode" => "Opencode AI — fully configured with muthr-services",
                             "hermes-agent" => "Hermes Agent — drops into shell after install",
@@ -261,7 +261,7 @@ async fn run() -> Result<(), color_eyre::Report> {
                     match trimmed.parse::<usize>() {
                         Ok(n) if n > 0 && n <= items.len() => {
                             let idx = n - 1;
-                            all_profiles[idx].to_string()
+                            all_profiles[idx].clone()
                         }
                         _ => {
                             return Ok(());
