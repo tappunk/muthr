@@ -54,8 +54,14 @@ pub async fn download(source: &str, file: Option<&str>) -> Result<(), color_eyre
 
     let mut headers = reqwest::header::HeaderMap::new();
     if let Ok(token) = std::env::var("HF_TOKEN") {
-        let auth_val = reqwest::header::HeaderValue::from_str(&format!("Bearer {}", token))?;
-        headers.insert(reqwest::header::AUTHORIZATION, auth_val);
+        match reqwest::header::HeaderValue::from_str(&format!("Bearer {}", token)) {
+            Ok(auth_val) => {
+                headers.insert(reqwest::header::AUTHORIZATION, auth_val);
+            }
+            Err(_) => {
+                eprintln!("warning: ignoring invalid HF_TOKEN value");
+            }
+        }
     }
 
     let client = reqwest::Client::builder()
