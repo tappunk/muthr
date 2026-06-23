@@ -505,7 +505,7 @@ pub fn list() -> Result<(), color_eyre::Report> {
 
     let headers = vec!["Preset", "Path", "Slots"];
 
-    match ui::select_table(&headers, rows) {
+    match ui::select_table(&headers, &rows) {
         Some(idx) => println!("{}", presets[idx].name),
         None => {
             for p in &presets {

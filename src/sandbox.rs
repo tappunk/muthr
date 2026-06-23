@@ -741,7 +741,7 @@ pub async fn list() -> Result<(), color_eyre::Report> {
         }
 
         let headers = vec!["vm", "status", "mount"];
-        crate::ui::select_table(&headers, rows);
+        crate::ui::select_table(&headers, &rows);
     }
 
     Ok(())

@@ -10,8 +10,8 @@ pub fn select_list(items: &[&str]) -> Option<usize> {
         return None;
     }
 
-    let stdout = io::stdout();
-    let mut handle = stdout.lock();
+    let stderr = io::stderr();
+    let mut handle = stderr.lock();
 
     writeln!(handle).ok();
     for (i, item) in items.iter().enumerate() {
@@ -34,16 +34,16 @@ pub fn select_list(items: &[&str]) -> Option<usize> {
     }
 }
 
-pub fn select_table(headers: &[&str], rows: Vec<Vec<String>>) -> Option<usize> {
+pub fn select_table(headers: &[&str], rows: &[Vec<String>]) -> Option<usize> {
     if rows.is_empty() {
         return None;
     }
 
-    let stdout = io::stdout();
-    let mut handle = stdout.lock();
+    let stderr = io::stderr();
+    let mut handle = stderr.lock();
 
     let mut col_widths: Vec<usize> = headers.iter().map(|h| h.len()).collect();
-    for row in &rows {
+    for row in rows {
         for (j, cell) in row.iter().enumerate() {
             if j < col_widths.len() && cell.len() > col_widths[j] {
                 col_widths[j] = cell.len();
@@ -92,8 +92,8 @@ pub fn select_provision_profile(items: &[ProvisionOption]) -> Option<usize> {
         return None;
     }
 
-    let stdout = io::stdout();
-    let mut handle = stdout.lock();
+    let stderr = io::stderr();
+    let mut handle = stderr.lock();
 
     writeln!(handle, "Select provision profile:").ok();
     for (i, item) in items.iter().enumerate() {

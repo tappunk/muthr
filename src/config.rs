@@ -46,10 +46,10 @@ impl MuthrConfig {
 
     pub fn print_resolved(&self) {
         let (server_port, workspace_root, model_dir, provision_profile) = self.clone().resolve();
-        println!("server_port       {}", server_port);
-        println!("workspace_root    {}", workspace_root);
-        println!("model_dir         {}", model_dir);
-        println!("provision_profile {}", provision_profile);
+        eprintln!("info: server_port       {}", server_port);
+        eprintln!("info: workspace_root    {}", workspace_root);
+        eprintln!("info: model_dir         {}", model_dir);
+        eprintln!("info: provision_profile {}", provision_profile);
     }
 }
 
