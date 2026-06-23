@@ -1,6 +1,7 @@
 use clap::Subcommand;
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
 #[derive(Subcommand)]
@@ -89,6 +90,7 @@ pub fn init_config(force: bool) -> Result<(), color_eyre::Report> {
     }
 
     fs::create_dir_all(&config_dir)?;
+    fs::set_permissions(&config_dir, fs::Permissions::from_mode(0o700))?;
 
     let template = r##"# muthr configuration
 server_port = 8080
@@ -98,6 +100,7 @@ default_provision_profile = "base"
 "##;
 
     fs::write(&config_path, template)?;
+    fs::set_permissions(&config_path, fs::Permissions::from_mode(0o600))?;
     eprintln!("info: created {}", config_path.display());
     Ok(())
 }
