@@ -1,3 +1,4 @@
+use std::io::IsTerminal;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -530,6 +531,14 @@ async fn apply_vram_limits(_foreground: bool) {
 
         let wired_mb = (mem_bytes / 1024 / 1024) * 85 / 100;
 
+        if !std::io::stdin().is_terminal() {
+            eprintln!(
+                "info: skipping iogpu tuning in non-interactive session, run 'sudo sysctl -w iogpu.wired_limit_mb={}' manually",
+                wired_mb
+            );
+            return;
+        }
+
         eprintln!(
             "info: tuning iogpu.wired_limit_mb={} ({}gb host)",
             wired_mb, gb
@@ -539,6 +548,10 @@ async fn apply_vram_limits(_foreground: bool) {
             Ok(f) => f,
             Err(e) => {
                 eprintln!("warning: cannot open /dev/tty for sudo: {}", e);
+                eprintln!(
+                    "info: run 'sudo sysctl -w iogpu.wired_limit_mb={}' manually",
+                    wired_mb
+                );
                 return;
             }
         };
@@ -547,6 +560,10 @@ async fn apply_vram_limits(_foreground: bool) {
             Ok(f) => f,
             Err(e) => {
                 eprintln!("warning: cannot clone /dev/tty for sudo stdin: {}", e);
+                eprintln!(
+                    "info: run 'sudo sysctl -w iogpu.wired_limit_mb={}' manually",
+                    wired_mb
+                );
                 return;
             }
         };
@@ -555,6 +572,10 @@ async fn apply_vram_limits(_foreground: bool) {
             Ok(f) => f,
             Err(e) => {
                 eprintln!("warning: cannot clone /dev/tty for sudo stdout: {}", e);
+                eprintln!(
+                    "info: run 'sudo sysctl -w iogpu.wired_limit_mb={}' manually",
+                    wired_mb
+                );
                 return;
             }
         };
@@ -563,6 +584,10 @@ async fn apply_vram_limits(_foreground: bool) {
             Ok(f) => f,
             Err(e) => {
                 eprintln!("warning: cannot clone /dev/tty for sudo stderr: {}", e);
+                eprintln!(
+                    "info: run 'sudo sysctl -w iogpu.wired_limit_mb={}' manually",
+                    wired_mb
+                );
                 return;
             }
         };
@@ -581,7 +606,13 @@ async fn apply_vram_limits(_foreground: bool) {
 
         match status {
             Ok(s) if s.success() => eprintln!("info: iogpu limits applied"),
-            _ => eprintln!("warning: iogpu tuning declined or timed out"),
+            _ => {
+                eprintln!("warning: iogpu tuning declined or timed out");
+                eprintln!(
+                    "info: run 'sudo sysctl -w iogpu.wired_limit_mb={}' manually",
+                    wired_mb
+                );
+            }
         }
     }
 }
