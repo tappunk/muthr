@@ -177,7 +177,7 @@ pub fn resolve_workspace_context() -> Result<(String, PathBuf, PathBuf), color_e
             "info: create it with 'mkdir -p {}' or set MUTHR_WORKSPACE_ROOT",
             workspace_root
         );
-        std::process::exit(1);
+        std::process::exit(66);
     }
 
     let result = (|| -> Option<(String, PathBuf)> {
@@ -356,7 +356,7 @@ pub async fn unprotect_vm(vm_name: &str) -> Result<(), color_eyre::Report> {
 pub async fn delete_vm(vm_name: &str, force: bool) -> Result<(), color_eyre::Report> {
     if !force && !std::io::stdout().is_terminal() {
         eprintln!("error: terminal required for deletion, use --force to skip");
-        std::process::exit(1);
+        std::process::exit(77);
     }
 
     eprintln!("info: deleting vm {}", vm_name);
@@ -473,7 +473,7 @@ async fn wait_for_vm_ready(vm_name: &str) -> Result<(), color_eyre::Report> {
     }
 }
 
-pub async fn up(profile_name: String) -> Result<(), color_eyre::Report> {
+pub async fn start(profile_name: String) -> Result<(), color_eyre::Report> {
     let (vm_name, mount_point, workdir) = resolve_workspace_context()?;
     eprintln!("info: target: {}", vm_name);
 
@@ -484,7 +484,7 @@ pub async fn up(profile_name: String) -> Result<(), color_eyre::Report> {
     if !manifest_path.exists() {
         eprintln!("error: manifest not found at {:?}", manifest_path);
         eprintln!("info: run 'muthr init'");
-        std::process::exit(1);
+        std::process::exit(66);
     }
 
     let content = fs::read_to_string(&manifest_path).await?;
@@ -614,13 +614,12 @@ pub async fn up(profile_name: String) -> Result<(), color_eyre::Report> {
         ];
         args.extend(target_args);
 
-        let status = Command::new("limactl")
+        let status = std::process::Command::new("limactl")
             .args(&args)
             .stdin(Stdio::inherit())
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
-            .status()
-            .await?;
+            .status()?;
 
         if !status.success() {
             return Err(color_eyre::eyre::eyre!(
@@ -638,7 +637,7 @@ pub async fn up(profile_name: String) -> Result<(), color_eyre::Report> {
         }
 
         eprintln!("info: sandbox ready, launching shell");
-        let status = Command::new("limactl")
+        let status = std::process::Command::new("limactl")
             .args([
                 "--tty",
                 "shell",
@@ -647,8 +646,7 @@ pub async fn up(profile_name: String) -> Result<(), color_eyre::Report> {
                 &vm_name,
             ])
             .stdin(Stdio::inherit())
-            .status()
-            .await?;
+            .status()?;
 
         if !status.success() {
             return Err(color_eyre::eyre::eyre!("shell session exited with error"));
@@ -658,7 +656,7 @@ pub async fn up(profile_name: String) -> Result<(), color_eyre::Report> {
     Ok(())
 }
 
-pub async fn down() -> Result<(), color_eyre::Report> {
+pub async fn stop() -> Result<(), color_eyre::Report> {
     let (vm_name, _, _) = resolve_workspace_context()?;
     if !vm_exists(&vm_name).await {
         return Ok(());
@@ -672,7 +670,7 @@ pub async fn down() -> Result<(), color_eyre::Report> {
     Ok(())
 }
 
-pub async fn list() -> Result<(), color_eyre::Report> {
+pub async fn ls(out_fmt: crate::OutputFormat) -> Result<(), color_eyre::Report> {
     let muthr_prefix = "muthr-";
 
     let output = Command::new("limactl")
@@ -691,53 +689,64 @@ pub async fn list() -> Result<(), color_eyre::Report> {
     };
 
     if vms.is_empty() {
-        println!("no managed vms");
+        if out_fmt == crate::OutputFormat::Text {
+            eprintln!("no managed vms");
+        } else if out_fmt == crate::OutputFormat::Json {
+            println!("[]");
+        }
+        return Ok(());
+    }
+
+    let mut entries: Vec<(String, String, String)> = Vec::new();
+    for vm in &vms {
+        let status = Command::new("limactl")
+            .args(["ls", "-f", "{{.Status}}", vm])
+            .output()
+            .await
+            .ok()
+            .and_then(|out| {
+                String::from_utf8_lossy(&out.stdout)
+                    .trim()
+                    .to_string()
+                    .split_whitespace()
+                    .next()
+                    .map(|s| s.to_string())
+            })
+            .unwrap_or_else(|| "unknown".to_string());
+
+        let project = vm.strip_prefix(muthr_prefix).unwrap_or(vm);
+        let mount_point = format!("/muthr-{}", project);
+        entries.push((vm.clone(), status, mount_point));
+    }
+
+    if out_fmt == crate::OutputFormat::Json {
+        let payload: Vec<serde_json::Value> = entries
+            .iter()
+            .map(|(name, status, mount)| {
+                serde_json::json!({"name": name, "status": status, "mount": mount})
+            })
+            .collect();
+        println!("{}", serde_json::to_string(&payload)?);
+        return Ok(());
+    }
+
+    if out_fmt == crate::OutputFormat::Ndjson {
+        for (name, status, mount) in &entries {
+            let payload = serde_json::json!({"name": name, "status": status, "mount": mount});
+            println!("{}", serde_json::to_string(&payload)?);
+        }
         return Ok(());
     }
 
     let is_tty = std::io::stdout().is_terminal();
     if !is_tty {
-        for vm in &vms {
-            let status = Command::new("limactl")
-                .args(["ls", "-f", "{{.Status}}", vm])
-                .output()
-                .await
-                .ok()
-                .and_then(|out| {
-                    String::from_utf8_lossy(&out.stdout)
-                        .trim()
-                        .to_string()
-                        .split_whitespace()
-                        .next()
-                        .map(|s| s.to_string())
-                })
-                .unwrap_or_else(|| "unknown".to_string());
-
-            let project = vm.strip_prefix(muthr_prefix).unwrap_or(vm);
-            let mount_point = format!("/muthr-{}", project);
-            println!("  {:<30} {}  mount: {}", vm, status, mount_point);
+        for (vm, status, mount_point) in &entries {
+            eprintln!("  {:<30} {}  mount: {}", vm, status, mount_point);
         }
     } else {
         let mut rows: Vec<Vec<String>> = Vec::new();
-        for vm in &vms {
-            let status = Command::new("limactl")
-                .args(["ls", "-f", "{{.Status}}", vm])
-                .output()
-                .await
-                .ok()
-                .and_then(|out| {
-                    String::from_utf8_lossy(&out.stdout)
-                        .trim()
-                        .to_string()
-                        .split_whitespace()
-                        .next()
-                        .map(|s| s.to_string())
-                })
-                .unwrap_or_else(|| "unknown".to_string());
-
-            let project = vm.strip_prefix(muthr_prefix).unwrap_or(vm);
-            let mount_point = format!("/muthr-{}", project);
-            rows.push(vec![vm.clone(), status, mount_point.to_string()]);
+        for (vm, status, mount_point) in &entries {
+            rows.push(vec![vm.clone(), status.clone(), mount_point.clone()]);
         }
 
         let headers = vec!["vm", "status", "mount"];

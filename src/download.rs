@@ -5,7 +5,11 @@ use tokio::io::AsyncWriteExt;
 
 use crate::config;
 
-pub async fn download(source: &str, file: Option<&str>) -> Result<(), color_eyre::Report> {
+pub async fn download(
+    source: &str,
+    file: Option<&str>,
+    output: crate::OutputFormat,
+) -> Result<(), color_eyre::Report> {
     let (repo, revision, filename) = match (source, file) {
         (url, None) if url.starts_with("http") && url.contains("huggingface.co") => {
             parse_hf_url(url)?
@@ -50,7 +54,9 @@ pub async fn download(source: &str, file: Option<&str>) -> Result<(), color_eyre
         return Ok(());
     }
 
-    eprintln!("info: fetching {}", filename);
+    if output == crate::OutputFormat::Text {
+        eprintln!("info: fetching {}", filename);
+    }
 
     let mut headers = reqwest::header::HeaderMap::new();
     if let Ok(token) = std::env::var("HF_TOKEN") {
@@ -78,32 +84,48 @@ pub async fn download(source: &str, file: Option<&str>) -> Result<(), color_eyre
     }
 
     let total_size = response.content_length().unwrap_or(0);
+    let show_progress = crate::ui::is_human_output(output);
     let pb = ProgressBar::new(total_size);
-    pb.set_style(
-        ProgressStyle::default_bar()
-            .template("{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes}/{total_bytes} ({eta})")?
-            .progress_chars("#>-"),
-    );
+    if show_progress {
+        pb.set_style(
+            ProgressStyle::default_bar()
+                .template("{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes}/{total_bytes} ({eta})")?
+                .progress_chars("#>-"),
+        );
+    }
 
     let tmp_file = format!("{}.tmp", target_path.display());
     let mut file = fs::File::create(&tmp_file).await?;
 
     while let Some(chunk) = response.chunk().await? {
         file.write_all(&chunk).await?;
-        pb.inc(chunk.len() as u64);
+        if show_progress {
+            pb.inc(chunk.len() as u64);
+        }
     }
 
-    pb.finish_with_message("downloaded");
+    if show_progress {
+        pb.finish_with_message("downloaded");
+    }
     fs::rename(&tmp_file, &target_path).await?;
 
-    if let Ok(metadata) = fs::metadata(&target_path).await {
-        eprintln!(
-            "info: done {} ({} bytes)",
-            target_path.display(),
-            metadata.len()
-        );
-    } else {
-        eprintln!("info: done");
+    let bytes = fs::metadata(&target_path).await.ok().map(|m| m.len());
+    match output {
+        crate::OutputFormat::Text => {
+            if let Some(size) = bytes {
+                eprintln!("info: done {} ({} bytes)", target_path.display(), size);
+            } else {
+                eprintln!("info: done");
+            }
+        }
+        crate::OutputFormat::Json | crate::OutputFormat::Ndjson => {
+            let payload = serde_json::json!({
+                "status": "done",
+                "path": target_path.to_string_lossy(),
+                "bytes": bytes,
+            });
+            println!("{}", serde_json::to_string(&payload)?);
+        }
     }
 
     Ok(())

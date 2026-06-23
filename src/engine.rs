@@ -95,7 +95,7 @@ pub async fn is_running() -> bool {
     is_llama_server_pid(pid).await
 }
 
-pub async fn serve(
+pub async fn start(
     profile: Option<String>,
     port: u16,
     foreground: bool,
@@ -367,7 +367,7 @@ pub async fn stop() -> Result<(), color_eyre::Report> {
     Ok(())
 }
 
-pub async fn status() -> Result<(), color_eyre::Report> {
+pub async fn status(output: crate::OutputFormat) -> Result<(), color_eyre::Report> {
     let home = std::env::var("HOME")?;
     let name_path = PathBuf::from(&home).join(".cache/muthr/active-preset-name");
 
@@ -379,16 +379,34 @@ pub async fn status() -> Result<(), color_eyre::Report> {
 
     let is_server_running = is_running().await;
 
-    if preset_name.is_empty() {
-        println!("muthr: not configured");
+    let overall_state = if preset_name.is_empty() {
+        "not_configured"
     } else if is_server_running {
-        println!("muthr: running");
+        "running"
     } else {
-        println!("muthr: configured, stopped");
+        "configured_stopped"
+    };
+
+    if output == crate::OutputFormat::Json || output == crate::OutputFormat::Ndjson {
+        let payload = serde_json::json!({
+            "state": overall_state,
+            "preset": if preset_name.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(preset_name.clone()) },
+            "server_running": is_server_running,
+        });
+        println!("{}", serde_json::to_string(&payload)?);
+        return Ok(());
     }
 
     if preset_name.is_empty() {
-        println!("  engine          (none)");
+        eprintln!("muthr: not configured");
+    } else if is_server_running {
+        eprintln!("muthr: running");
+    } else {
+        eprintln!("muthr: configured, stopped");
+    }
+
+    if preset_name.is_empty() {
+        eprintln!("  engine          (none)");
     } else {
         let preset =
             preset::resolve_preset(&preset_name).and_then(|p| preset::parse_preset(&p).ok());
@@ -396,13 +414,13 @@ pub async fn status() -> Result<(), color_eyre::Report> {
             .as_ref()
             .map(|p| p.name.as_str())
             .unwrap_or_else(|| preset_name.as_str());
-        println!("  engine          active      {}", profile_label);
+        eprintln!("  engine          active      {}", profile_label);
     }
 
     if is_server_running {
-        println!("  server          running");
+        eprintln!("  server          running");
     } else {
-        println!("  server          stopped");
+        eprintln!("  server          stopped");
     }
 
     let services_vm = "muthr-services";
@@ -425,7 +443,7 @@ pub async fn status() -> Result<(), color_eyre::Report> {
     };
 
     if let Some(status) = services_status {
-        println!("  services vm      {}     {}", services_vm, status);
+        eprintln!("  services vm      {}     {}", services_vm, status);
 
         let provision_output = AsyncCommand::new("limactl")
             .args([
@@ -441,10 +459,10 @@ pub async fn status() -> Result<(), color_eyre::Report> {
 
         match provision_output {
             Some(out) if out.status.success() => {
-                println!("  mcp provisioned  yes");
+                eprintln!("  mcp provisioned  yes");
             }
             _ => {
-                println!("  mcp provisioned  no");
+                eprintln!("  mcp provisioned  no");
             }
         }
     }
@@ -472,14 +490,14 @@ pub async fn status() -> Result<(), color_eyre::Report> {
         }
 
         if !active_sandboxes.is_empty() {
-            println!("  sandboxes");
+            eprintln!("  sandboxes");
             for (i, (token, status)) in active_sandboxes.iter().enumerate() {
                 let connector = if i + 1 == active_sandboxes.len() {
                     "    └─"
                 } else {
                     "    ├─"
                 };
-                println!("{} {:<20} {}", connector, token, status);
+                eprintln!("{} {:<20} {}", connector, token, status);
             }
         }
     }
@@ -487,10 +505,37 @@ pub async fn status() -> Result<(), color_eyre::Report> {
     Ok(())
 }
 
-pub fn list() -> Result<(), color_eyre::Report> {
+pub fn presets(output: crate::OutputFormat) -> Result<(), color_eyre::Report> {
     let presets = preset::list_presets()?;
     if presets.is_empty() {
         eprintln!("error: no presets in ~/.config/muthr/provider.d/");
+        return Ok(());
+    }
+
+    if output == crate::OutputFormat::Json {
+        let payload: Vec<serde_json::Value> = presets
+            .iter()
+            .map(|p| {
+                serde_json::json!({
+                    "name": p.name,
+                    "path": p.path.to_string_lossy().to_string(),
+                    "slots": p.slots.len(),
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string(&payload)?);
+        return Ok(());
+    }
+
+    if output == crate::OutputFormat::Ndjson {
+        for p in &presets {
+            let payload = serde_json::json!({
+                "name": p.name,
+                "path": p.path.to_string_lossy().to_string(),
+                "slots": p.slots.len(),
+            });
+            println!("{}", serde_json::to_string(&payload)?);
+        }
         return Ok(());
     }
 
@@ -506,10 +551,10 @@ pub fn list() -> Result<(), color_eyre::Report> {
     let headers = vec!["Preset", "Path", "Slots"];
 
     match ui::select_table(&headers, &rows) {
-        Some(idx) => println!("{}", presets[idx].name),
+        Some(idx) => eprintln!("{}", presets[idx].name),
         None => {
             for p in &presets {
-                println!(
+                eprintln!(
                     "  {:<30} {} [{}]",
                     p.name,
                     p.path.to_string_lossy(),

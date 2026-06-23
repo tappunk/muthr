@@ -1,4 +1,4 @@
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 
 pub struct ProvisionOption<'a> {
     pub label: &'a str,
@@ -114,4 +114,24 @@ pub fn select_provision_profile(items: &[ProvisionOption]) -> Option<usize> {
         Ok(n) if n > 0 && n <= items.len() => Some(n - 1),
         _ => select_provision_profile(items),
     }
+}
+
+pub fn is_human_output(output: crate::OutputFormat) -> bool {
+    if output != crate::OutputFormat::Text {
+        return false;
+    }
+    if std::env::var("NO_COLOR").is_ok() {
+        return false;
+    }
+    if let Ok(v) = std::env::var("CLICOLOR")
+        && v == "0"
+    {
+        return false;
+    }
+    if let Ok(v) = std::env::var("CLICOLOR_FORCE")
+        && v == "1"
+    {
+        return true;
+    }
+    io::stderr().is_terminal()
 }

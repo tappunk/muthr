@@ -28,15 +28,15 @@ muthr --help             # List all subcommands
 muthr init               # Clone specs from tappunk/muthr-specs
 muthr download <source>  # Fetch GGUF model from HuggingFace
 
-muthr serve              # Start llama-server as a background daemon
-muthr serve --foreground # Run in foreground
-muthr stop               # Stop the engine
-muthr list               # List available preset profiles
+muthr engine start              # Start llama-server as a background daemon
+muthr engine start --foreground # Run in foreground
+muthr engine stop               # Stop the engine
+muthr engine presets            # List available preset profiles
 
-muthr up                 # Provision a Debian 13 VM for the current project
-muthr ls                 # List all managed sandbox VMs
-muthr down               # Stop the current sandbox
-muthr delete             # Delete the active sandbox VM
+muthr sandbox start      # Provision a Debian 13 VM for the current project
+muthr sandbox ls         # List all managed sandbox VMs
+muthr sandbox stop       # Stop the current sandbox
+muthr sandbox delete     # Delete the active sandbox VM
 
 muthr services start     # Launch muthr-services VM
 muthr services status
@@ -44,7 +44,7 @@ muthr services stop
 muthr services restart   # Restart the muthr-services VM
 muthr services delete    # Delete the muthr-services VM
 
-muthr boot               # Full stack startup: inference engine + muthr-services VM
+muthr run                # Full stack startup: inference engine + muthr-services VM
 muthr shutdown           # Graceful shutdown of all owned components
 
 muthr config init        # Create muthr.toml config file

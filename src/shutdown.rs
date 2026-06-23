@@ -38,7 +38,11 @@ async fn stop_vm(name: String, timeout_secs: u64, verbose: bool) {
     }
 }
 
-pub async fn run(verbose: bool, timeout_secs: Option<u64>) {
+pub async fn run(verbose: bool, timeout_secs: Option<u64>, _yes: bool, dry_run: bool) {
+    if dry_run {
+        eprintln!("info: dry run, skipping shutdown actions");
+        return;
+    }
     let default_timeout = DEFAULT_TIMEOUT_SECS;
     let timeout = timeout_secs.unwrap_or(default_timeout);
 

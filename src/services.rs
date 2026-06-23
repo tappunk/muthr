@@ -6,16 +6,24 @@ use tempfile::NamedTempFile;
 
 pub async fn run(action: crate::ServicesCommands) -> Result<(), color_eyre::Report> {
     match action {
-        crate::ServicesCommands::Start => start().await?,
-        crate::ServicesCommands::Stop => stop().await?,
-        crate::ServicesCommands::Status => status().await?,
-        crate::ServicesCommands::Restart => restart().await?,
-        crate::ServicesCommands::Delete { force } => delete(force).await?,
+        crate::ServicesCommands::Start { dry_run } => start(dry_run).await?,
+        crate::ServicesCommands::Stop { dry_run } => stop(dry_run).await?,
+        crate::ServicesCommands::Status { output } => status(output).await?,
+        crate::ServicesCommands::Restart { dry_run } => restart(dry_run).await?,
+        crate::ServicesCommands::Delete {
+            force,
+            yes,
+            dry_run,
+        } => delete(force || yes, dry_run).await?,
     }
     Ok(())
 }
 
-pub async fn start() -> Result<(), color_eyre::Report> {
+pub async fn start(dry_run: bool) -> Result<(), color_eyre::Report> {
+    if dry_run {
+        eprintln!("info: dry run, skipping services start");
+        return Ok(());
+    }
     let vm_name = "muthr-services";
     let home = std::env::var("HOME")?;
     let template_path = PathBuf::from(&home).join(".config/muthr/manifests/muthr-services.yaml");
@@ -110,7 +118,11 @@ pub async fn start() -> Result<(), color_eyre::Report> {
     Ok(())
 }
 
-pub async fn stop() -> Result<(), color_eyre::Report> {
+pub async fn stop(dry_run: bool) -> Result<(), color_eyre::Report> {
+    if dry_run {
+        eprintln!("info: dry run, skipping services stop");
+        return Ok(());
+    }
     let vm_name = "muthr-services";
 
     if !is_vm_exists(vm_name) {
@@ -135,7 +147,7 @@ pub async fn stop() -> Result<(), color_eyre::Report> {
     Ok(())
 }
 
-pub async fn status() -> Result<(), color_eyre::Report> {
+pub async fn status(output: crate::OutputFormat) -> Result<(), color_eyre::Report> {
     let vm_name = "muthr-services";
 
     if !is_vm_exists(vm_name) {
@@ -156,15 +168,29 @@ pub async fn status() -> Result<(), color_eyre::Report> {
         })
         .unwrap_or_else(|| "unknown".to_string());
 
-    println!("muthr-services vm: {}", status.to_lowercase());
+    match output {
+        crate::OutputFormat::Text => eprintln!("muthr-services vm: {}", status.to_lowercase()),
+        crate::OutputFormat::Json => {
+            let payload = serde_json::json!({"name": vm_name, "status": status.to_lowercase()});
+            println!("{}", serde_json::to_string(&payload)?);
+        }
+        crate::OutputFormat::Ndjson => {
+            let payload = serde_json::json!({"name": vm_name, "status": status.to_lowercase()});
+            println!("{}", serde_json::to_string(&payload)?);
+        }
+    }
 
     Ok(())
 }
 
-pub async fn restart() -> Result<(), color_eyre::Report> {
-    stop().await?;
+pub async fn restart(dry_run: bool) -> Result<(), color_eyre::Report> {
+    if dry_run {
+        eprintln!("info: dry run, skipping services restart");
+        return Ok(());
+    }
+    stop(false).await?;
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-    start().await?;
+    start(false).await?;
     Ok(())
 }
 
@@ -220,7 +246,11 @@ fn is_vm_provisioned(vm_name: &str) -> bool {
     }
 }
 
-pub async fn delete(force: bool) -> Result<(), color_eyre::Report> {
+pub async fn delete(force: bool, dry_run: bool) -> Result<(), color_eyre::Report> {
+    if dry_run {
+        eprintln!("info: dry run, skipping services delete");
+        return Ok(());
+    }
     let vm_name = "muthr-services";
 
     if !is_vm_exists(vm_name) {
@@ -228,8 +258,8 @@ pub async fn delete(force: bool) -> Result<(), color_eyre::Report> {
     }
 
     if !force && !std::io::stdout().is_terminal() {
-        eprintln!("error: terminal required for deletion, use --force");
-        std::process::exit(1);
+        eprintln!("error: terminal required for deletion, use --yes");
+        std::process::exit(77);
     }
 
     eprintln!("info: deleting muthr-services vm");
