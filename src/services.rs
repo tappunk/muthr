@@ -104,8 +104,8 @@ pub async fn start() -> Result<(), color_eyre::Report> {
         }
     }
 
-    println!("searxng:  http://127.0.0.1:18766");
-    println!("mcp:      http://127.0.0.1:18765/mcp");
+    eprintln!("info: searxng:  http://127.0.0.1:18766");
+    eprintln!("info: mcp:      http://127.0.0.1:18765/mcp");
 
     Ok(())
 }
