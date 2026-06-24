@@ -195,6 +195,8 @@ pub async fn start(
             args.push("--ctx-size".to_string());
             args.push(ctx.to_string());
         }
+        args.push("--ctx-checkpoints".to_string());
+        args.push("0".to_string());
         if let Some(k) = &slot.cache_type_k {
             args.push("--cache-type-k".to_string());
             args.push(k.clone());
