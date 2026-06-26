@@ -44,8 +44,9 @@ Download from [GitHub Releases](https://github.com/tappunk/muthr/releases).
 
 ```bash
 muthr init                   # Clone runtime profiles and VM definitions
+muthr download unsloth/Qwen3.6-35B-A3B-GGUF \
+               Qwen3.6-35B-A3B-UD-Q4_K_M.gguf  # Download a model
 muthr run                    # Boot inference engine + services VM
-muthr download unsloth/Qwen3.6-35B-A3B-GGUF Qwen3.6-35B-A3B-UD-Q4_K_M.gguf   # Download a working model
 muthr sandbox start          # Create a sandbox for the current project
 ```
 
@@ -75,6 +76,16 @@ muthr sandbox stop           # Stop the active sandbox
 muthr sandbox delete         # Delete the active sandbox
 ```
 
+### Manage the services VM
+
+```bash
+muthr services start           # Create and provision the muthr-services VM
+muthr services stop            # Stop the services VM
+muthr services status          # Check services VM state
+muthr services restart         # Stop and restart the services VM
+muthr services delete          # Delete the services VM (requires --yes or --force)
+```
+
 ### Full stack lifecycle
 
 ```bash
@@ -87,6 +98,13 @@ muthr shutdown               # Stop everything with timeout management
 ```bash
 muthr download org/model model.gguf
 muthr download https://huggingface.co/org/model/resolve/main/model.gguf
+```
+
+### Manage configuration
+
+```bash
+muthr config init            # Create muthr.toml (use --force to overwrite)
+muthr config show            # Print resolved configuration
 ```
 
 ### Shell completions
