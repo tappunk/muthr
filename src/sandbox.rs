@@ -755,16 +755,17 @@ pub async fn start(profile_name: String) -> Result<(), color_eyre::Report> {
         slot_name.unwrap_or_else(|| "local-model".to_string())
     };
 
-    let parsed_model = match crate::model::poll_loaded_model("127.0.0.1", server_port, 20, 1.0).await {
-        Ok(model) => model,
-        Err(err) => {
-            eprintln!(
-                "warning: failed to poll loaded model from llama-server, using fallback: {}",
-                err
-            );
-            resolve_default_model().await
-        }
-    };
+    let parsed_model =
+        match crate::model::poll_loaded_model("127.0.0.1", server_port, 20, 1.0).await {
+            Ok(model) => model,
+            Err(err) => {
+                eprintln!(
+                    "warning: failed to poll loaded model from llama-server, using fallback: {}",
+                    err
+                );
+                resolve_default_model().await
+            }
+        };
     let sanitized_model = std::path::Path::new(&parsed_model)
         .file_stem()
         .and_then(|s| s.to_str())
