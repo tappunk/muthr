@@ -43,12 +43,13 @@ pub async fn start(dry_run: bool) -> Result<(), color_eyre::Report> {
             let mut tmp_yaml = NamedTempFile::new()?;
             tmp_yaml.write_all(content.as_bytes())?;
 
-            let create_status = Command::new("limactl")
+            let mut create_cmd = Command::new("limactl");
+            create_cmd
                 .args(["create", "--name", vm_name])
                 .arg(tmp_yaml.path())
                 .stdout(Stdio::inherit())
-                .stderr(Stdio::inherit())
-                .status()?;
+                .stderr(Stdio::inherit());
+            let create_status = create_cmd.status()?;
 
             if !create_status.success() {
                 return Err(color_eyre::eyre::eyre!(
@@ -56,22 +57,24 @@ pub async fn start(dry_run: bool) -> Result<(), color_eyre::Report> {
                 ));
             }
 
-            let start_status = Command::new("limactl")
+            let mut start_cmd = Command::new("limactl");
+            start_cmd
                 .args(["start", vm_name])
                 .stdout(Stdio::inherit())
-                .stderr(Stdio::inherit())
-                .status()?;
+                .stderr(Stdio::inherit());
+            let start_status = start_cmd.status()?;
 
             if !start_status.success() {
                 return Err(color_eyre::eyre::eyre!("failed to start muthr-services vm"));
             }
         } else {
             eprintln!("info: starting muthr-services vm");
-            let status = Command::new("limactl")
+            let mut start_cmd = Command::new("limactl");
+            start_cmd
                 .args(["start", vm_name])
                 .stdout(Stdio::inherit())
-                .stderr(Stdio::inherit())
-                .status()?;
+                .stderr(Stdio::inherit());
+            let status = start_cmd.status()?;
 
             if !status.success() {
                 return Err(color_eyre::eyre::eyre!("failed to start muthr-services vm"));
@@ -83,13 +86,13 @@ pub async fn start(dry_run: bool) -> Result<(), color_eyre::Report> {
     }
 
     if !is_vm_provisioned(vm_name) {
-        let cp_status = Command::new("limactl")
-            .args([
-                "cp",
-                &format!("{}/.config/muthr/provision.d/muthr-services.sh", home),
-                &format!("{}:/tmp/muthr-services.sh", vm_name),
-            ])
-            .status()?;
+        let mut cp_cmd = Command::new("limactl");
+        cp_cmd.args([
+            "cp",
+            &format!("{}/.config/muthr/provision.d/muthr-services.sh", home),
+            &format!("{}:/tmp/muthr-services.sh", vm_name),
+        ]);
+        let cp_status = cp_cmd.status()?;
 
         if !cp_status.success() {
             return Err(color_eyre::eyre::eyre!(
@@ -97,11 +100,12 @@ pub async fn start(dry_run: bool) -> Result<(), color_eyre::Report> {
             ));
         }
 
-        let provision_status = Command::new("limactl")
+        let mut provision_cmd = Command::new("limactl");
+        provision_cmd
             .args(["shell", vm_name, "bash", "/tmp/muthr-services.sh", vm_name])
             .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
-            .status()?;
+            .stderr(Stdio::inherit());
+        let provision_status = provision_cmd.status()?;
 
         if provision_status.success() {
             eprintln!("info: muthr-services vm provisioned");
@@ -139,7 +143,7 @@ pub async fn stop(dry_run: bool) -> Result<(), color_eyre::Report> {
         Some(out) if out.status.success() => {
             eprintln!("info: stopped {}", vm_name);
         }
-        _ => {
+        Some(_) | None => {
             eprintln!("warning: acpi stop sequence sent");
         }
     }
@@ -226,7 +230,7 @@ fn is_vm_running(vm_name: &str) -> bool {
             let status = String::from_utf8_lossy(&out.stdout);
             status.contains("Running")
         }
-        _ => false,
+        Some(_) | None => false,
     }
 }
 

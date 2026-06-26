@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use tempfile::NamedTempFile;
 use tokio::fs;
+use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
@@ -89,15 +90,15 @@ fn parse_manifest_yaml(content: &str) -> Result<LimaManifest, color_eyre::Report
         .map_err(|e| color_eyre::eyre::eyre!("invalid manifest yaml: {}", e))
 }
 
-fn update_mount_placeholders(manifest: &mut LimaManifest, mount_str: &str) {
+fn update_mount_placeholders(manifest: &mut LimaManifest, host_workspace: &str, guest_mount: &str) {
     if let Some(mounts) = manifest.mounts.as_mut() {
         for mount in mounts {
             if mount.location == "__WORKSPACE_ROOT__" {
-                mount.location = mount_str.to_string();
+                mount.location = host_workspace.to_string();
             }
 
             if mount.mount_point == "__MOUNT_POINT__" {
-                mount.mount_point = mount_str.to_string();
+                mount.mount_point = guest_mount.to_string();
             }
         }
     }
@@ -121,31 +122,38 @@ fn sanitize_project_name(name: &str) -> Option<String> {
     Some(sanitized)
 }
 
-fn paths_are_prefix(current: &Path, potential_parent: &Path) -> bool {
-    let canonical_pair = match (
-        std::fs::canonicalize(current),
-        std::fs::canonicalize(potential_parent),
-    ) {
-        (Ok(a), Ok(b)) => (a, b),
-        _ => return false,
-    };
-
-    let current_components: Vec<_> = canonical_pair.0.components().collect();
-    let parent_components: Vec<_> = canonical_pair.1.components().collect();
-
-    if parent_components.len() > current_components.len() {
-        return false;
-    }
-
-    current_components
+fn project_name_suffix(seed: &str) -> String {
+    let hash = seed
+        .as_bytes()
         .iter()
-        .zip(parent_components.iter())
-        .all(|(a, b)| a == b)
+        .fold(0xcbf29ce484222325_u64, |acc, b| {
+            (acc ^ u64::from(*b)).wrapping_mul(0x100000001b3)
+        });
+    format!("{:08x}", (hash & 0xffff_ffff) as u32)
+}
+
+fn validate_workspace_root(workspace: &Path, home: &Path) -> Result<(), color_eyre::Report> {
+    if workspace == Path::new("/") {
+        return Err(color_eyre::eyre::eyre!("workspace root cannot be '/'"));
+    }
+    if workspace == Path::new("/Users") {
+        return Err(color_eyre::eyre::eyre!("workspace root cannot be '/Users'"));
+    }
+    if workspace == home {
+        return Err(color_eyre::eyre::eyre!("workspace root cannot be '$HOME'"));
+    }
+    if !workspace.starts_with(home) {
+        return Err(color_eyre::eyre::eyre!(
+            "workspace root must be inside '$HOME'"
+        ));
+    }
+    Ok(())
 }
 
 pub fn resolve_workspace_context() -> Result<(String, PathBuf, PathBuf), color_eyre::Report> {
     let current_dir = std::env::current_dir()?;
     let home = std::env::var("HOME")?;
+    let canonical_current_dir = current_dir.canonicalize()?;
 
     let raw_workspace_root = if let Ok(v) = std::env::var("MUTHR_WORKSPACE_ROOT") {
         v
@@ -162,12 +170,11 @@ pub fn resolve_workspace_context() -> Result<(String, PathBuf, PathBuf), color_e
         .unwrap_or(raw_workspace_root);
 
     let muthr_config_dir = PathBuf::from(&home).join(".config/muthr");
-    if paths_are_prefix(&current_dir, &muthr_config_dir) {
-        return Ok((
-            "muthr-config".to_string(),
-            muthr_config_dir.clone(),
-            current_dir,
-        ));
+    if muthr_config_dir.exists()
+        && let Ok(canonical_muthr_config_dir) = muthr_config_dir.canonicalize()
+        && canonical_current_dir.starts_with(&canonical_muthr_config_dir)
+    {
+        return Ok(("muthr-config".to_string(), muthr_config_dir, current_dir));
     }
 
     let workspace_path = PathBuf::from(&workspace_root);
@@ -180,54 +187,48 @@ pub fn resolve_workspace_context() -> Result<(String, PathBuf, PathBuf), color_e
         std::process::exit(66);
     }
 
-    let result = (|| -> Option<(String, PathBuf)> {
-        let relative = current_dir.strip_prefix(&workspace_path).ok()?;
-        let project_name = relative.components().next()?.as_os_str().to_str()?;
-        sanitize_project_name(project_name)
-            .map(|s| (format!("muthr-{}", s), workspace_path.join(&s)))
-    })();
+    let canonical_workspace_path = workspace_path
+        .canonicalize()
+        .map_err(|e| color_eyre::eyre::eyre!("failed to canonicalize workspace root: {}", e))?;
+    let canonical_home = PathBuf::from(&home)
+        .canonicalize()
+        .map_err(|e| color_eyre::eyre::eyre!("failed to canonicalize home directory: {}", e))?;
 
-    let (project_folder, mount_point) = match result {
-        Some(v) => v,
-        None => {
-            let can_current = std::fs::canonicalize(&current_dir).map_err(|e| {
-                color_eyre::eyre::eyre!("failed to canonicalize current directory: {}", e)
-            })?;
-            let can_workspace = workspace_path.canonicalize().map_err(|e| {
-                color_eyre::eyre::eyre!("failed to canonicalize workspace root: {}", e)
-            })?;
+    validate_workspace_root(&canonical_workspace_path, &canonical_home)?;
 
-            if can_current == can_workspace {
-                return Err(color_eyre::eyre::eyre!(
-                    "navigate into a project directory first"
-                ));
-            }
+    if canonical_current_dir == canonical_workspace_path {
+        return Err(color_eyre::eyre::eyre!(
+            "navigate into a project directory first"
+        ));
+    }
 
-            let relative = match can_current.strip_prefix(&can_workspace) {
-                Ok(r) => r,
-                Err(_) => {
-                    return Err(color_eyre::eyre::eyre!(
-                        "current directory is not within the canonicalized workspace root"
-                    ));
-                }
-            };
-            let project_name = relative
-                .components()
-                .next()
-                .ok_or_else(|| color_eyre::eyre::eyre!("invalid workspace path"))?
-                .as_os_str()
-                .to_str()
-                .ok_or_else(|| color_eyre::eyre::eyre!("invalid project name"))?;
-
-            let sanitized = sanitize_project_name(project_name)
-                .ok_or_else(|| color_eyre::eyre::eyre!("sanitized project name is empty"))?;
-
-            (
-                format!("muthr-{}", sanitized),
-                can_workspace.join(&sanitized),
-            )
-        }
+    let relative = canonical_current_dir
+        .strip_prefix(&canonical_workspace_path)
+        .map_err(|_| {
+            color_eyre::eyre::eyre!("current directory is outside the configured workspace root")
+        })?;
+    let project_component = relative
+        .components()
+        .next()
+        .ok_or_else(|| color_eyre::eyre::eyre!("invalid workspace path"))?
+        .as_os_str();
+    let project_name = project_component
+        .to_str()
+        .ok_or_else(|| color_eyre::eyre::eyre!("invalid project name"))?;
+    let sanitized_project_name = sanitize_project_name(project_name)
+        .ok_or_else(|| color_eyre::eyre::eyre!("sanitized project name is empty"))?;
+    let project_token = if sanitized_project_name == project_name {
+        sanitized_project_name
+    } else {
+        format!(
+            "{}-{}",
+            sanitized_project_name,
+            project_name_suffix(project_name)
+        )
     };
+
+    let project_folder = format!("muthr-{}", project_token);
+    let mount_point = canonical_workspace_path.join(project_component);
 
     Ok((project_folder, mount_point, current_dir))
 }
@@ -249,6 +250,65 @@ pub async fn vm_exists(vm_name: &str) -> bool {
         }
     }
     false
+}
+
+pub async fn cleanup_untracked_vms(verbose: bool) -> Result<(), color_eyre::Report> {
+    let home = std::env::var("HOME")?;
+    let cache_dir = PathBuf::from(home).join(".cache/muthr");
+
+    let output = Command::new("limactl")
+        .args(["ls", "-q"])
+        .output()
+        .await
+        .ok()
+        .filter(|o| o.status.success());
+
+    let vms: Vec<String> = match output {
+        Some(out) => String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter(|name| name.starts_with("muthr-") && *name != "muthr-services")
+            .map(std::borrow::ToOwned::to_owned)
+            .collect(),
+        None => Vec::new(),
+    };
+
+    let now = std::time::SystemTime::now();
+
+    for vm_name in vms {
+        let marker = cache_dir.join(format!("{}-profiles", vm_name));
+        if marker.exists() {
+            continue;
+        }
+
+        let vm_store_dir = cache_dir
+            .parent()
+            .and_then(std::path::Path::parent)
+            .map(|p| p.join(".lima").join(&vm_name));
+        if let Some(store_dir) = vm_store_dir
+            && let Ok(meta) = std::fs::metadata(&store_dir)
+            && let Ok(modified) = meta.modified()
+            && now.duration_since(modified).unwrap_or_default().as_secs() < 300
+        {
+            if verbose {
+                eprintln!("info: skipping young sandbox vm {}", vm_name);
+            }
+            continue;
+        }
+
+        if vm_is_running(&vm_name).await {
+            if verbose {
+                eprintln!("info: skipping running untracked sandbox vm {}", vm_name);
+            }
+            continue;
+        }
+
+        if verbose {
+            eprintln!("warning: removing untracked sandbox vm {}", vm_name);
+        }
+        delete_vm(&vm_name, true).await?;
+    }
+
+    Ok(())
 }
 
 pub async fn vm_is_running(vm_name: &str) -> bool {
@@ -413,13 +473,110 @@ pub async fn run_provision(
         .to_str()
         .ok_or_else(|| color_eyre::eyre::eyre!("workspace mount path contains invalid UTF-8"))?;
 
+    fn validate_env_value(value: &str, field: &str) -> Result<(), color_eyre::Report> {
+        if value.contains('\0') || value.contains('\n') || value.contains('\r') {
+            return Err(color_eyre::eyre::eyre!(
+                "invalid value for {}: contains control characters",
+                field
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_model_name(model_name: &str) -> Result<(), color_eyre::Report> {
+        if model_name.is_empty() {
+            return Err(color_eyre::eyre::eyre!("invalid model name: empty"));
+        }
+        if model_name
+            .chars()
+            .any(|c| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | ':' | '/')))
+        {
+            return Err(color_eyre::eyre::eyre!(
+                "invalid model name: unsupported characters"
+            ));
+        }
+        Ok(())
+    }
+
     eprintln!("info: provisioning: {}", script_name);
-    let script_content = fs::read_to_string(&host_script).await?;
     let openai_url = format!("http://host.lima.internal:{}/v1", port);
-    let openai_env = format!("MUTHR_OPENAI_URL={}", openai_url);
-    let model_env = format!("MUTHR_MODEL_NAME={}", model_name);
-    let ctx_env = format!("MUTHR_CTX_WINDOW={}", ctx_window);
-    let mount_env = format!("MUTHR_WORKSPACE_MOUNT={}", mount_str);
+    validate_env_value(&openai_url, "MUTHR_OPENAI_URL")?;
+    validate_env_value(model_name, "MUTHR_MODEL_NAME")?;
+    validate_model_name(model_name)?;
+    validate_env_value(mount_str, "MUTHR_WORKSPACE_MOUNT")?;
+
+    let host_lib_dir = host_script
+        .parent()
+        .ok_or_else(|| color_eyre::eyre::eyre!("invalid provision script path"))?
+        .join("lib");
+    if !host_lib_dir.is_dir() {
+        return Err(color_eyre::eyre::eyre!(
+            "provision library directory not found: {:?}",
+            host_lib_dir
+        ));
+    }
+
+    let guest_provision_dir = format!("/tmp/muthr-provision-{}", script_name);
+
+    let mkdir_status = Command::new("limactl")
+        .args([
+            "shell",
+            "--workdir",
+            "/tmp",
+            vm_name,
+            "mkdir",
+            "-p",
+            &guest_provision_dir,
+        ])
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .await?;
+    if !mkdir_status.success() {
+        return Err(color_eyre::eyre::eyre!(
+            "failed to prepare guest provision directory"
+        ));
+    }
+
+    let guest_script_path = format!("{}/{}.sh", guest_provision_dir, script_name);
+    let guest_lib_dir = format!("{}/lib", guest_provision_dir);
+
+    let copy_script_status = Command::new("limactl")
+        .args([
+            "cp",
+            host_script.to_str().ok_or_else(|| {
+                color_eyre::eyre::eyre!("provision script path contains invalid UTF-8")
+            })?,
+            &format!("{}:{}", vm_name, guest_provision_dir),
+        ])
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .await?;
+    if !copy_script_status.success() {
+        return Err(color_eyre::eyre::eyre!(
+            "failed to copy provision script into VM"
+        ));
+    }
+
+    let copy_lib_status = Command::new("limactl")
+        .args([
+            "cp",
+            "-r",
+            host_lib_dir.to_str().ok_or_else(|| {
+                color_eyre::eyre::eyre!("provision lib path contains invalid UTF-8")
+            })?,
+            &format!("{}:{}", vm_name, guest_lib_dir),
+        ])
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .await?;
+    if !copy_lib_status.success() {
+        return Err(color_eyre::eyre::eyre!(
+            "failed to copy provision library into VM"
+        ));
+    }
 
     let mut child = Command::new("limactl")
         .args([
@@ -427,21 +584,21 @@ pub async fn run_provision(
             "--workdir",
             "/tmp",
             vm_name,
-            "env",
-            &openai_env,
-            &model_env,
-            &ctx_env,
-            &mount_env,
             "bash",
-            "-s",
+            &guest_script_path,
         ])
+        .env("MUTHR_OPENAI_URL", openai_url)
+        .env("MUTHR_MODEL_NAME", model_name)
+        .env("MUTHR_CTX_WINDOW", ctx_window.to_string())
+        .env("MUTHR_WORKSPACE_MOUNT", mount_str)
         .stdin(Stdio::piped())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
+        .kill_on_drop(true)
         .spawn()?;
 
     if let Some(ref mut stdin) = child.stdin {
-        stdin.write_all(script_content.as_bytes()).await?;
+        stdin.shutdown().await.ok();
     }
     std::mem::drop(child.stdin.take());
 
@@ -474,7 +631,7 @@ async fn wait_for_vm_ready(vm_name: &str) -> Result<(), color_eyre::Report> {
 }
 
 pub async fn start(profile_name: String) -> Result<(), color_eyre::Report> {
-    let (vm_name, mount_point, workdir) = resolve_workspace_context()?;
+    let (vm_name, project_root, workdir) = resolve_workspace_context()?;
     eprintln!("info: target: {}", vm_name);
 
     let home = std::env::var("HOME")?;
@@ -487,10 +644,22 @@ pub async fn start(profile_name: String) -> Result<(), color_eyre::Report> {
         std::process::exit(66);
     }
 
-    let content = fs::read_to_string(&manifest_path).await?;
-    let mount_str = mount_point
+    let manifest_file = fs::File::open(&manifest_path).await?;
+    let mut content = String::new();
+    manifest_file
+        .take((MAX_MANIFEST_BYTES + 1) as u64)
+        .read_to_string(&mut content)
+        .await?;
+    if content.len() > MAX_MANIFEST_BYTES {
+        return Err(color_eyre::eyre::eyre!(
+            "manifest exceeds max size: {} bytes",
+            MAX_MANIFEST_BYTES
+        ));
+    }
+    let host_workspace_mount = project_root
         .to_str()
         .ok_or_else(|| color_eyre::eyre::eyre!("workspace path contains invalid UTF-8"))?;
+    let guest_workspace_mount = "/workspace";
     let mut manifest_doc = parse_manifest_yaml(&content).map_err(|e| {
         color_eyre::eyre::eyre!(
             "failed to parse manifest '{}': {}",
@@ -498,7 +667,11 @@ pub async fn start(profile_name: String) -> Result<(), color_eyre::Report> {
             e
         )
     })?;
-    update_mount_placeholders(&mut manifest_doc, mount_str);
+    update_mount_placeholders(
+        &mut manifest_doc,
+        host_workspace_mount,
+        guest_workspace_mount,
+    );
     let expanded = serialize_manifest_yaml(&manifest_doc)?;
 
     if !vm_exists(&vm_name).await {
@@ -506,24 +679,26 @@ pub async fn start(profile_name: String) -> Result<(), color_eyre::Report> {
         let mut tmp_yaml = NamedTempFile::new()?;
         tmp_yaml.write_all(expanded.as_bytes())?;
 
-        let create_status = Command::new("limactl")
+        let mut create_cmd = Command::new("limactl");
+        create_cmd
             .args(["create", "--name", &vm_name])
             .arg(tmp_yaml.path())
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
-            .status()
-            .await?;
+            .kill_on_drop(true);
+        let create_status = create_cmd.status().await?;
 
         if !create_status.success() {
             return Err(color_eyre::eyre::eyre!("failed to create vm: {}", vm_name));
         }
 
-        let start_status = Command::new("limactl")
+        let mut start_cmd = Command::new("limactl");
+        start_cmd
             .args(["start", &vm_name])
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
-            .status()
-            .await?;
+            .kill_on_drop(true);
+        let start_status = start_cmd.status().await?;
 
         if !start_status.success() {
             return Err(color_eyre::eyre::eyre!("failed to start vm: {}", vm_name));
@@ -534,12 +709,13 @@ pub async fn start(profile_name: String) -> Result<(), color_eyre::Report> {
         protect_vm(&vm_name).await?;
     } else if !vm_is_running(&vm_name).await {
         eprintln!("info: starting vm {}", vm_name);
-        let status = Command::new("limactl")
+        let mut start_cmd = Command::new("limactl");
+        start_cmd
             .args(["start", &vm_name])
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
-            .status()
-            .await?;
+            .kill_on_drop(true);
+        let status = start_cmd.status().await?;
 
         if !status.success() {
             return Err(color_eyre::eyre::eyre!("failed to start VM: {}", vm_name));
@@ -550,9 +726,45 @@ pub async fn start(profile_name: String) -> Result<(), color_eyre::Report> {
         eprintln!("info: vm already running");
     }
 
+    let guest_workdir = match workdir.strip_prefix(&project_root) {
+        Ok(relative_workdir) => PathBuf::from(guest_workspace_mount).join(relative_workdir),
+        Err(_) => PathBuf::from(guest_workspace_mount),
+    };
+    let guest_workdir_str = guest_workdir
+        .to_str()
+        .ok_or_else(|| color_eyre::eyre::eyre!("guest workdir contains invalid UTF-8"))?;
+
     let cfg = crate::config::load()?;
     let server_port = cfg.server_port.unwrap_or(8080);
-    let parsed_model = crate::model::poll_loaded_model("127.0.0.1", server_port, 20, 1.0).await?;
+    let resolve_default_model = || async {
+        let preset_name_path = PathBuf::from(&home).join(".cache/muthr/active-preset-name");
+        let preset_name = fs::read_to_string(&preset_name_path)
+            .await
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+
+        let slot_name = preset_name
+            .as_deref()
+            .and_then(crate::preset::resolve_preset)
+            .and_then(|path| crate::preset::parse_preset(&path).ok())
+            .and_then(|preset| preset.slots.first().map(|slot| slot.name.clone()))
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+
+        slot_name.unwrap_or_else(|| "local-model".to_string())
+    };
+
+    let parsed_model = match crate::model::poll_loaded_model("127.0.0.1", server_port, 20, 1.0).await {
+        Ok(model) => model,
+        Err(err) => {
+            eprintln!(
+                "warning: failed to poll loaded model from llama-server, using fallback: {}",
+                err
+            );
+            resolve_default_model().await
+        }
+    };
     let sanitized_model = std::path::Path::new(&parsed_model)
         .file_stem()
         .and_then(|s| s.to_str())
@@ -560,7 +772,7 @@ pub async fn start(profile_name: String) -> Result<(), color_eyre::Report> {
         .trim_end_matches(".gguf")
         .to_string();
     let active_model = if sanitized_model.trim().is_empty() {
-        "01-qwen3-6-35b-a3b".to_string()
+        resolve_default_model().await
     } else {
         sanitized_model
     };
@@ -573,29 +785,30 @@ pub async fn start(profile_name: String) -> Result<(), color_eyre::Report> {
             .join(".cache/muthr")
             .join(format!("{}-profiles", vm_name));
 
+        eprintln!("info: applying profile: {}", profile_name);
+        run_provision(
+            &vm_name,
+            &profile_name,
+            &active_model,
+            ctx_window,
+            Path::new(guest_workspace_mount),
+            server_port,
+        )
+        .await?;
+
         let existing_profiles = fs::read_to_string(&cache_dir).await.unwrap_or_default();
         if !existing_profiles.lines().any(|l| l.trim() == profile_name) {
-            eprintln!("info: applying profile: {}", profile_name);
-            run_provision(
-                &vm_name,
-                &profile_name,
-                &active_model,
-                ctx_window,
-                &mount_point,
-                server_port,
-            )
-            .await?;
-
-            let mut existing = existing_profiles.clone();
+            let mut existing = existing_profiles;
             if !existing.is_empty() && !existing.ends_with('\n') {
                 existing.push('\n');
             }
             existing.push_str(&profile_name);
             existing.push('\n');
-            fs::create_dir_all(cache_dir.parent().unwrap()).await?;
+            let Some(cache_parent) = cache_dir.parent() else {
+                return Err(color_eyre::eyre::eyre!("invalid profile cache path"));
+            };
+            fs::create_dir_all(cache_parent).await?;
             fs::write(&cache_dir, existing).await?;
-        } else {
-            eprintln!("info: profile '{}' already applied", profile_name);
         }
 
         eprintln!("info: launching workspace context");
@@ -605,13 +818,7 @@ pub async fn start(profile_name: String) -> Result<(), color_eyre::Report> {
             _ => vec![],
         };
 
-        let mut args = vec![
-            "--tty",
-            "shell",
-            "--workdir",
-            workdir.to_str().unwrap_or("/tmp"),
-            &vm_name,
-        ];
+        let mut args = vec!["--tty", "shell", "--workdir", guest_workdir_str, &vm_name];
         args.extend(target_args);
 
         let status = std::process::Command::new("limactl")
@@ -632,19 +839,16 @@ pub async fn start(profile_name: String) -> Result<(), color_eyre::Report> {
             .join(format!("{}-profiles", vm_name));
 
         if !cache_dir.exists() {
-            fs::create_dir_all(cache_dir.parent().unwrap()).await?;
+            let Some(cache_parent) = cache_dir.parent() else {
+                return Err(color_eyre::eyre::eyre!("invalid profile cache path"));
+            };
+            fs::create_dir_all(cache_parent).await?;
             fs::write(&cache_dir, "base\n").await?;
         }
 
         eprintln!("info: sandbox ready, launching shell");
         let status = std::process::Command::new("limactl")
-            .args([
-                "--tty",
-                "shell",
-                "--workdir",
-                workdir.to_str().unwrap_or("/tmp"),
-                &vm_name,
-            ])
+            .args(["--tty", "shell", "--workdir", guest_workdir_str, &vm_name])
             .stdin(Stdio::inherit())
             .status()?;
 

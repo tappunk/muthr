@@ -34,9 +34,10 @@ pub fn list_profiles(config_dir: &Path) -> Result<Vec<Profile>, color_eyre::Repo
 }
 
 pub fn resolve_manifest(config_dir: &Path, profile_name: &str) -> PathBuf {
-    let profile_specific = config_dir.join(format!("{}.yaml", profile_name));
+    let manifests_dir = config_dir.join("manifests");
+    let profile_specific = manifests_dir.join(format!("{}.yaml", profile_name));
     if profile_specific.is_file() {
         return profile_specific;
     }
-    config_dir.join("base-sandbox.yaml")
+    manifests_dir.join("base-sandbox.yaml")
 }

@@ -22,10 +22,11 @@ use crate::config::ConfigCommands;
     name = "muthr",
     version,
     author,
-    about = "Manage llama.cpp inference and Lima sandbox VMs for local AI development.",
-    long_about = "muthr automates llama.cpp for local inference and manages isolated Lima sandbox VMs for running AI agents with safe access to your workspace.\n\nPrerequisites: macOS (Apple Silicon) or Linux, Lima VM, and llama.cpp",
+    about = "Manage llama.cpp inference and Lima sandbox vms for local ai development",
+    long_about = "Zero-trust orchestrator for llama.cpp inference and Lima sandbox vms.\nPrerequisites: macOS arm64, Lima, llama.cpp",
     arg_required_else_help = false,
-    propagate_version = true
+    propagate_version = true,
+    trailing_var_arg = true
 )]
 struct Cli {
     #[command(subcommand)]
@@ -42,25 +43,25 @@ pub enum OutputFormat {
 
 #[derive(Subcommand)]
 enum Commands {
-    #[command(about = "Manage the llama-server inference engine")]
+    #[command(about = "Manage llama.cpp inference engine")]
     Engine {
         #[command(subcommand)]
         action: EngineCommands,
     },
 
-    #[command(about = "Manage project sandbox VMs")]
+    #[command(about = "Manage project sandbox vms")]
     Sandbox {
         #[command(subcommand)]
         action: SandboxCommands,
     },
 
-    #[command(about = "Manage the persistent muthr-services VM")]
+    #[command(about = "Manage persistent muthr-services vm")]
     Services {
         #[command(subcommand)]
         action: ServicesCommands,
     },
 
-    #[command(about = "Full stack startup: inference engine + muthr-services VM")]
+    #[command(about = "Start inference engine and muthr-services vm")]
     Run {
         #[arg(long, help = "Show detailed progress output during boot")]
         verbose: bool,
@@ -70,9 +71,7 @@ enum Commands {
         dry_run: bool,
     },
 
-    #[command(
-        about = "Graceful shutdown of all owned components: sandboxes, muthr-services VM, and inference engine"
-    )]
+    #[command(about = "Shutdown all managed components")]
     Shutdown {
         #[arg(long, help = "Show detailed progress output during shutdown")]
         verbose: bool,
@@ -88,7 +87,7 @@ enum Commands {
         dry_run: bool,
     },
 
-    #[command(about = "Download a GGUF model from Hugging Face")]
+    #[command(about = "Download gguf model from huggingface")]
     Download {
         #[arg(help = "Hugging Face repository (repo/name) or explicit resolve URL")]
         source: String,
@@ -107,7 +106,7 @@ enum Commands {
         shell: Shell,
     },
 
-    #[command(about = "Initialize muthr configurations from the upstream repository")]
+    #[command(about = "Initialize muthr from upstream specs")]
     Init {
         #[arg(
             long,
@@ -121,7 +120,7 @@ enum Commands {
         force: bool,
     },
 
-    #[command(about = "Manage muthr configuration")]
+    #[command(about = "Manage muthr config")]
     Config {
         #[command(subcommand)]
         action: ConfigCommands,
@@ -130,27 +129,27 @@ enum Commands {
 
 #[derive(Subcommand)]
 pub enum ServicesCommands {
-    #[command(about = "Start the muthr-services VM")]
+    #[command(about = "Start muthr-services vm")]
     Start {
         #[arg(short = 'n', long, help = "Preview actions without side effects")]
         dry_run: bool,
     },
-    #[command(about = "Stop the muthr-services VM")]
+    #[command(about = "Stop muthr-services vm")]
     Stop {
         #[arg(short = 'n', long, help = "Preview actions without side effects")]
         dry_run: bool,
     },
-    #[command(about = "Show the muthr-services VM execution status")]
+    #[command(about = "Show muthr-services vm status")]
     Status {
         #[arg(short, long, value_enum, default_value_t = OutputFormat::Text)]
         output: OutputFormat,
     },
-    #[command(about = "Restart the muthr-services VM execution context")]
+    #[command(about = "Restart muthr-services vm")]
     Restart {
         #[arg(short = 'n', long, help = "Preview actions without side effects")]
         dry_run: bool,
     },
-    #[command(about = "Delete the muthr-services VM")]
+    #[command(about = "Delete muthr-services vm")]
     Delete {
         #[arg(long, help = "Skip confirmation prompt")]
         force: bool,
@@ -163,7 +162,7 @@ pub enum ServicesCommands {
 
 #[derive(Subcommand)]
 pub enum EngineCommands {
-    #[command(about = "Start the llama-server inference engine")]
+    #[command(about = "Start llama.cpp inference engine")]
     Start {
         #[arg(long, help = "Name of the target preset profile to load")]
         profile: Option<String>,
@@ -178,14 +177,14 @@ pub enum EngineCommands {
         )]
         foreground: bool,
     },
-    #[command(about = "Stop the background llama-server daemon")]
+    #[command(about = "Stop inference engine")]
     Stop,
     #[command(about = "Show engine status")]
     Status {
         #[arg(short, long, value_enum, default_value_t = OutputFormat::Text)]
         output: OutputFormat,
     },
-    #[command(about = "List available preset profiles")]
+    #[command(about = "List preset profiles")]
     Presets {
         #[arg(short, long, value_enum, default_value_t = OutputFormat::Text)]
         output: OutputFormat,
@@ -194,7 +193,7 @@ pub enum EngineCommands {
 
 #[derive(Subcommand)]
 pub enum SandboxCommands {
-    #[command(about = "Provision and start a Lima sandbox VM for the current project")]
+    #[command(about = "Start sandbox vm for current project")]
     Start {
         #[arg(
             long,
@@ -202,9 +201,9 @@ pub enum SandboxCommands {
         )]
         profile: Option<String>,
     },
-    #[command(about = "Stop the active project sandbox VM")]
+    #[command(about = "Stop active sandbox vm")]
     Stop,
-    #[command(about = "Delete the active project sandbox VM")]
+    #[command(about = "Delete active sandbox vm")]
     Delete {
         #[arg(long, help = "Skip confirmation prompt")]
         force: bool,
@@ -213,7 +212,7 @@ pub enum SandboxCommands {
         #[arg(short = 'n', long, help = "Preview actions without side effects")]
         dry_run: bool,
     },
-    #[command(about = "List all managed sandbox VMs")]
+    #[command(about = "List sandbox vms")]
     Ls {
         #[arg(short, long, value_enum, default_value_t = OutputFormat::Text)]
         output: OutputFormat,
@@ -227,6 +226,8 @@ async fn main() -> color_eyre::Result<()> {
 }
 
 async fn boot(verbose: bool) -> Result<(), color_eyre::Report> {
+    sandbox::cleanup_untracked_vms(verbose).await?;
+
     if engine::is_running().await {
         eprintln!("info: engine already running");
     } else {
@@ -240,7 +241,7 @@ async fn boot(verbose: bool) -> Result<(), color_eyre::Report> {
 
     let vm_name = "muthr-services";
     let output = AsyncCommand::new("limactl")
-        .args(["ls", "-f", "'{{.Status}}'", vm_name])
+        .args(["ls", "-f", "{{.Status}}", vm_name])
         .output()
         .await
         .ok();
@@ -380,7 +381,9 @@ async fn run() -> Result<(), color_eyre::Report> {
             output,
         }) => download::download(&source, file.as_deref(), output).await?,
         Some(Commands::Init { git_url, force }) => {
-            init::run(init::InitCommands { git_url, force })?
+            tokio::task::spawn_blocking(move || init::run(init::InitCommands { git_url, force }))
+                .await
+                .map_err(|e| color_eyre::eyre::eyre!("init task failed: {}", e))??
         }
         Some(Commands::Config { action }) => match action {
             ConfigCommands::Init { force } => config::init_config(force)?,

@@ -29,7 +29,7 @@ fn physical_cpu_count() -> u32 {
                 return count;
             }
         }
-        _ => {}
+        Ok(_) | Err(_) => {}
     }
 
     std::thread::available_parallelism()
@@ -170,6 +170,7 @@ pub async fn start(
         bind_host.clone(),
         "--port".to_string(),
         server_port.to_string(),
+        "--reuse-port".to_string(),
         "--prio".to_string(),
         "2".to_string(),
         "--n-gpu-layers".to_string(),
@@ -591,63 +592,15 @@ async fn apply_vram_limits(_foreground: bool) {
             wired_mb, gb
         );
 
-        let tty = match std::fs::File::open("/dev/tty") {
-            Ok(f) => f,
-            Err(e) => {
-                eprintln!("warning: cannot open /dev/tty for sudo: {}", e);
-                eprintln!(
-                    "info: run 'sudo sysctl -w iogpu.wired_limit_mb={}' manually",
-                    wired_mb
-                );
-                return;
-            }
-        };
-
-        let stdin_tty = match tty.try_clone() {
-            Ok(f) => f,
-            Err(e) => {
-                eprintln!("warning: cannot clone /dev/tty for sudo stdin: {}", e);
-                eprintln!(
-                    "info: run 'sudo sysctl -w iogpu.wired_limit_mb={}' manually",
-                    wired_mb
-                );
-                return;
-            }
-        };
-
-        let stdout_tty = match tty.try_clone() {
-            Ok(f) => f,
-            Err(e) => {
-                eprintln!("warning: cannot clone /dev/tty for sudo stdout: {}", e);
-                eprintln!(
-                    "info: run 'sudo sysctl -w iogpu.wired_limit_mb={}' manually",
-                    wired_mb
-                );
-                return;
-            }
-        };
-
-        let stderr_tty = match tty.try_clone() {
-            Ok(f) => f,
-            Err(e) => {
-                eprintln!("warning: cannot clone /dev/tty for sudo stderr: {}", e);
-                eprintln!(
-                    "info: run 'sudo sysctl -w iogpu.wired_limit_mb={}' manually",
-                    wired_mb
-                );
-                return;
-            }
-        };
-
         let status = AsyncCommand::new("sudo")
             .args([
                 "sysctl",
                 "-w",
                 &format!("iogpu.wired_limit_mb={}", wired_mb),
             ])
-            .stdin(stdin_tty)
-            .stdout(stdout_tty)
-            .stderr(stderr_tty)
+            .stdin(Stdio::inherit())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
             .status()
             .await;
 
