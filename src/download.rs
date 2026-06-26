@@ -1,9 +1,10 @@
 use indicatif::{ProgressBar, ProgressStyle};
-use std::path::PathBuf;
+use tempfile::NamedTempFile;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 
 use crate::config;
+use crate::preset;
 
 pub async fn download(
     source: &str,
@@ -27,7 +28,7 @@ pub async fn download(
     }
 
     let cfg = config::load()?;
-    let model_dir = cfg.model_dir.unwrap_or_else(|| {
+    let raw_model_dir = cfg.model_dir.unwrap_or_else(|| {
         if let Ok(home) = std::env::var("HOME") {
             format!("{}/opt/models", home)
         } else {
@@ -35,12 +36,8 @@ pub async fn download(
         }
     });
 
-    let model_dir = model_dir
-        .strip_prefix("~/")
-        .map(|p| format!("{}/{}", std::env::var("HOME").unwrap_or_default(), p))
-        .unwrap_or(model_dir);
-
-    let model_subdir = PathBuf::from(&model_dir).join(&repo);
+    let model_dir = preset::expand_home(std::path::Path::new(&raw_model_dir));
+    let model_subdir = model_dir.join(&repo);
     let target_path = model_subdir.join(&filename);
     let url = format!(
         "https://huggingface.co/{}/resolve/{}/{}",
@@ -94,8 +91,9 @@ pub async fn download(
         );
     }
 
-    let tmp_file = format!("{}.tmp", target_path.display());
-    let mut file = fs::File::create(&tmp_file).await?;
+    let tmp_host_file = NamedTempFile::new_in(&model_subdir)?;
+    let tmp_path = tmp_host_file.path().to_path_buf();
+    let mut file = fs::File::from_std(tmp_host_file.reopen()?);
 
     while let Some(chunk) = response.chunk().await? {
         file.write_all(&chunk).await?;
@@ -107,7 +105,9 @@ pub async fn download(
     if show_progress {
         pb.finish_with_message("downloaded");
     }
-    fs::rename(&tmp_file, &target_path).await?;
+    file.flush().await?;
+    drop(file);
+    fs::rename(&tmp_path, &target_path).await?;
 
     let bytes = fs::metadata(&target_path).await.ok().map(|m| m.len());
     match output {
