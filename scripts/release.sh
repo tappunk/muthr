@@ -104,16 +104,31 @@ rollback() {
   if git rev-parse "v$NEW_VERSION" >/dev/null 2>&1; then
     git tag -d "v$NEW_VERSION"
   fi
-  if [[ -n "$BACKUP_CARGO_TOML" && -f "$BACKUP_CARGO_TOML" ]]; then
+  if [[ -n "${BACKUP_CARGO_TOML:-}" && -f "$BACKUP_CARGO_TOML" ]]; then
     cp "$BACKUP_CARGO_TOML" Cargo.toml
   fi
-  if [[ -n "$BACKUP_CARGO_LOCK" && -f "$BACKUP_CARGO_LOCK" ]]; then
+  if [[ -n "${BACKUP_CARGO_LOCK:-}" && -f "$BACKUP_CARGO_LOCK" ]]; then
     cp "$BACKUP_CARGO_LOCK" Cargo.lock
   fi
-  if [[ -n "$BACKUP_FLAKE_NIX" && -f "$BACKUP_FLAKE_NIX" ]]; then
+  if [[ -n "${BACKUP_FLAKE_NIX:-}" && -f "$BACKUP_FLAKE_NIX" ]]; then
     cp "$BACKUP_FLAKE_NIX" flake.nix
   fi
-  rm -f Cargo.toml.bak flake.nix.bak "${ARCHIVE_NAME:-}" "${CHECKSUM_NAME:-}" "$BACKUP_CARGO_TOML" "$BACKUP_CARGO_LOCK" "$BACKUP_FLAKE_NIX" 2>/dev/null || true
+  rm -f Cargo.toml.bak flake.nix.bak 2>/dev/null || true
+  if [[ -n "${ARCHIVE_NAME:-}" ]]; then
+    rm -f "$ARCHIVE_NAME"
+  fi
+  if [[ -n "${CHECKSUM_NAME:-}" ]]; then
+    rm -f "$CHECKSUM_NAME"
+  fi
+  if [[ -n "${BACKUP_CARGO_TOML:-}" ]]; then
+    rm -f "$BACKUP_CARGO_TOML"
+  fi
+  if [[ -n "${BACKUP_CARGO_LOCK:-}" ]]; then
+    rm -f "$BACKUP_CARGO_LOCK"
+  fi
+  if [[ -n "${BACKUP_FLAKE_NIX:-}" ]]; then
+    rm -f "$BACKUP_FLAKE_NIX"
+  fi
   if [[ -n "${STAGING_DIR:-}" && -d "${STAGING_DIR}" ]]; then
     rm -rf "${STAGING_DIR}"
   fi
