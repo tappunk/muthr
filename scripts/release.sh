@@ -232,7 +232,7 @@ EOF
 (
   cd "$TAP_DIR"
   git add Formula/muthr.rb
-  git commit -m "bump: muthr v${NEW_VERSION}"
+  git commit -m "chore(formula): bump muthr to v${NEW_VERSION}"
   git push origin main
 )
 rm -rf "$TAP_DIR"
