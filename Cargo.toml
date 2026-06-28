@@ -4,11 +4,11 @@ version = "0.1.44"
 edition = "2024"
 rust-version = "1.95"
 authors = ["tappunk"]
-description = "Zero-trust orchestrator for local ai inference and sandbox vms"
+description = "Zero-trust orchestrator for local MLX inference and container-based sandbox VMs on Apple Silicon"
 repository = "https://github.com/tappunk/muthr"
-license = "MIT"
+license = "Apache-2.0"
 readme = "README.md"
-keywords = ["cli", "lima", "llama-cpp", "macos"]
+keywords = ["cli", "mlxcel", "mlx", "macos", "apple-container", "apple-silicon"]
 categories = [
   "command-line-utilities",
   "virtualization",

@@ -1,5 +1,5 @@
 {
-  description = "A zero-trust orchestrator that automates secure inference and isolated execution of local AI agents.";
+  description = "Zero-trust orchestrator for MLX inference and container-based sandboxes on Apple Silicon.";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
@@ -23,9 +23,9 @@
         nativeBuildInputs = with pkgs; [ installShellFiles ];
 
         meta = with pkgs.lib; {
-          description = "A zero-trust orchestrator that automates secure inference and isolated execution of local AI agents.";
+      description = "Zero-trust orchestrator for MLX inference and container-based sandboxes on Apple Silicon.";
           homepage = "https://github.com/tappunk/muthr";
-          license = licenses.mit;
+          license = licenses.asl20;
           maintainers = [ ];
           platforms = [ "aarch64-darwin" ];
           mainProgram = "muthr";
