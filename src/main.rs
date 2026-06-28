@@ -325,9 +325,8 @@ async fn run() -> Result<(), color_eyre::Report> {
 
                 let profile_name = match profile {
                     Some(p) => p,
-                    None
-                        if sandbox_exists
-                            && !all_profiles.iter().any(|name| name == &default_profile) =>
+                    None if sandbox_exists
+                        && !all_profiles.iter().any(|name| name == &default_profile) =>
                     {
                         "base".to_string()
                     }
