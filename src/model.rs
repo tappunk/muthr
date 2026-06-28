@@ -1,4 +1,95 @@
+// Copyright 2026 tappunk
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use std::time::Duration;
+
+fn value_as_u32(value: &serde_json::Value) -> Option<u32> {
+    if let Some(v) = value.as_u64() {
+        return u32::try_from(v).ok();
+    }
+    if let Some(v) = value.as_i64()
+        && v >= 0
+    {
+        return u32::try_from(v as u64).ok();
+    }
+    if let Some(v) = value.as_str()
+        && let Ok(parsed) = v.parse::<u32>()
+    {
+        return Some(parsed);
+    }
+    None
+}
+
+fn extract_ctx_window(item: &serde_json::Value) -> Option<u32> {
+    let top_level_keys = [
+        "context_window",
+        "context_length",
+        "max_context_length",
+        "input_token_limit",
+        "max_input_tokens",
+        "n_ctx",
+    ];
+    for key in top_level_keys {
+        if let Some(value) = item.get(key)
+            && let Some(parsed) = value_as_u32(value)
+        {
+            return Some(parsed);
+        }
+    }
+
+    if let Some(meta) = item.get("meta") {
+        let meta_keys = [
+            "n_ctx",
+            "context_window",
+            "context_length",
+            "max_context_length",
+        ];
+        for key in meta_keys {
+            if let Some(value) = meta.get(key)
+                && let Some(parsed) = value_as_u32(value)
+            {
+                return Some(parsed);
+            }
+        }
+    }
+
+    if let Some(limits) = item.get("limits") {
+        if let Some(value) = limits.get("context")
+            && let Some(parsed) = value_as_u32(value)
+        {
+            return Some(parsed);
+        }
+        if let Some(value) = limits.get("input")
+            && let Some(parsed) = value_as_u32(value)
+        {
+            return Some(parsed);
+        }
+    }
+
+    if let Some(capabilities) = item.get("capabilities") {
+        let capability_keys = ["context_window", "max_context_length", "input_token_limit"];
+        for key in capability_keys {
+            if let Some(value) = capabilities.get(key)
+                && let Some(parsed) = value_as_u32(value)
+            {
+                return Some(parsed);
+            }
+        }
+    }
+
+    None
+}
 
 pub async fn verify_health(host: &str, port: u16) -> bool {
     let client = match reqwest::Client::builder()
@@ -24,14 +115,14 @@ pub async fn get_ctx_window(host: &str, port: u16) -> Result<u32, color_eyre::Re
 
     if let Some(data) = json.get("data").and_then(|d| d.as_array()) {
         for item in data {
-            if let Some(n_ctx) = item
-                .get("meta")
-                .and_then(|m| m.get("n_ctx"))
-                .and_then(|v| v.as_u64())
-            {
-                return Ok(n_ctx as u32);
+            if let Some(ctx) = extract_ctx_window(item) {
+                return Ok(ctx);
             }
         }
+    }
+
+    if let Some(ctx) = extract_ctx_window(&json) {
+        return Ok(ctx);
     }
 
     Ok(16000)
@@ -69,6 +160,6 @@ pub async fn poll_loaded_model(
     }
 
     Err(color_eyre::eyre::eyre!(
-        "timeout: could not get loaded model from llama-server"
+        "timeout: could not get loaded model from mlxcel-server"
     ))
 }

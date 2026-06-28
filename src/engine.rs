@@ -1,3 +1,19 @@
+// Copyright 2026 tappunk
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use clap::ValueEnum;
+use serde::{Deserialize, Serialize};
 use std::io::IsTerminal;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
@@ -9,6 +25,45 @@ use crate::model;
 use crate::preset;
 use crate::ui;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+pub enum EngineRuntime {
+    #[value(name = "mlxcel")]
+    Mlxcel,
+}
+
+impl EngineRuntime {
+    fn as_str(self) -> &'static str {
+        "mlxcel"
+    }
+
+    fn pid_file_name(self) -> &'static str {
+        "mlxcel-server.pid"
+    }
+
+    fn stdout_log_name(self) -> &'static str {
+        "mlxcel-server.log"
+    }
+
+    fn stderr_log_name(self) -> &'static str {
+        "mlxcel-server-err.log"
+    }
+
+    fn executable(self) -> &'static str {
+        "mlxcel-server"
+    }
+
+    fn active_preset_file_name(self) -> &'static str {
+        "active-preset-name-mlxcel"
+    }
+}
+
+impl std::fmt::Display for EngineRuntime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
 pub async fn verify_health(port: u16) -> bool {
     model::verify_health("127.0.0.1", port).await
 }
@@ -17,36 +72,7 @@ fn is_process_alive(pid: u32) -> bool {
     unsafe { libc::kill(pid as i32, 0) == 0 }
 }
 
-fn physical_cpu_count() -> u32 {
-    let output = std::process::Command::new("sysctl")
-        .args(["-n", "hw.perflevel0.physicalcpu"])
-        .output();
-    match output {
-        Ok(ref out) if out.status.success() => {
-            let raw = String::from_utf8_lossy(&out.stdout);
-            let digits: String = raw.chars().filter(|c| c.is_ascii_digit()).collect();
-            if let Ok(count) = digits.parse::<u32>() {
-                return count;
-            }
-        }
-        Ok(_) | Err(_) => {}
-    }
-
-    std::thread::available_parallelism()
-        .map(|p| p.get() as u32)
-        .unwrap_or(4)
-}
-
-fn clamp_threads(value: u32, max_threads: u32) -> u32 {
-    if value > max_threads && value != 0 {
-        eprintln!("warning: clamping threads {} -> {}", value, max_threads);
-        max_threads
-    } else {
-        value
-    }
-}
-
-async fn is_llama_server_pid(pid: u32) -> bool {
+async fn is_runtime_pid(pid: u32) -> bool {
     if !is_process_alive(pid) {
         return false;
     }
@@ -63,11 +89,8 @@ async fn is_llama_server_pid(pid: u32) -> bool {
                 continue;
             }
             let comm = parts[0].trim();
-            if comm != "llama-server" {
-                continue;
-            }
             let args = parts[1];
-            if args.contains("--model") || args.contains("--host") {
+            if matches_runtime_process(comm, args) {
                 return true;
             }
         }
@@ -75,37 +98,150 @@ async fn is_llama_server_pid(pid: u32) -> bool {
     false
 }
 
-pub async fn is_running() -> bool {
+fn matches_runtime_process(comm: &str, args: &str) -> bool {
+    comm == "mlxcel-server"
+        || comm == "mlxcel"
+        || args.contains(" mlxcel-server")
+        || args.contains("/mlxcel-server")
+        || (args.contains("mlxcel") && args.contains(" serve "))
+}
+
+async fn list_runtime_pids() -> Vec<u32> {
+    let output = AsyncCommand::new("ps")
+        .args(["-axo", "pid=,comm=,args="])
+        .output()
+        .await;
+    let mut pids = Vec::new();
+
+    if let Ok(out) = output {
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        for line in stdout.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            let mut parts = trimmed.split_whitespace();
+            let pid_str = match parts.next() {
+                Some(v) => v,
+                None => continue,
+            };
+            let comm = match parts.next() {
+                Some(v) => v,
+                None => continue,
+            };
+            let args = parts.collect::<Vec<_>>().join(" ");
+
+            if let Ok(pid) = pid_str.parse::<u32>()
+                && matches_runtime_process(comm, &args)
+            {
+                pids.push(pid);
+            }
+        }
+    }
+
+    pids.sort_unstable();
+    pids.dedup();
+    pids
+}
+
+async fn list_container_sandboxes() -> Vec<(String, String)> {
+    let output = AsyncCommand::new("container")
+        .args(["list", "--all", "--format", "json"])
+        .output()
+        .await;
+    let Ok(out) = output else {
+        return Vec::new();
+    };
+    if !out.status.success() {
+        return Vec::new();
+    }
+
+    let Ok(items) = serde_json::from_slice::<Vec<serde_json::Value>>(&out.stdout) else {
+        return Vec::new();
+    };
+
+    let mut rows = Vec::new();
+    for item in items {
+        let id = item
+            .get("id")
+            .and_then(|v| v.as_str())
+            .or_else(|| {
+                item.get("configuration")
+                    .and_then(|v| v.get("id"))
+                    .and_then(|v| v.as_str())
+            })
+            .unwrap_or_default()
+            .to_string();
+        if !id.starts_with("muthr-") || id == "muthr-services" || id == "muthr-searxng" {
+            continue;
+        }
+
+        let status = item
+            .get("status")
+            .and_then(|v| v.as_str())
+            .or_else(|| item.get("state").and_then(|v| v.as_str()))
+            .or_else(|| {
+                item.get("status")
+                    .and_then(|v| v.get("state"))
+                    .and_then(|v| v.as_str())
+            })
+            .unwrap_or("unknown")
+            .to_string();
+
+        let token = id.strip_prefix("muthr-").unwrap_or(&id).to_string();
+        rows.push((token, status));
+    }
+
+    rows.sort_by(|a, b| a.0.cmp(&b.0));
+    rows
+}
+
+pub async fn is_running(runtime: EngineRuntime) -> bool {
     let home = std::env::var("HOME");
     let pid_file = match home {
-        Ok(ref h) => PathBuf::from(h).join(".cache/muthr/llama-server.pid"),
+        Ok(ref h) => PathBuf::from(h).join(format!(".cache/muthr/{}", runtime.pid_file_name())),
         Err(_) => return false,
     };
-    if !pid_file.exists() {
-        return false;
+
+    if pid_file.exists() {
+        let pid_bytes = match fs::read_to_string(&pid_file).await {
+            Ok(b) => b,
+            Err(_) => return !list_runtime_pids().await.is_empty(),
+        };
+
+        let pid = match pid_bytes.trim().parse::<u32>() {
+            Ok(p) => p,
+            Err(_) => {
+                fs::remove_file(&pid_file).await.ok();
+                return !list_runtime_pids().await.is_empty();
+            }
+        };
+
+        if is_runtime_pid(pid).await {
+            return true;
+        }
+
+        fs::remove_file(&pid_file).await.ok();
     }
-    let pid_bytes = match fs::read_to_string(&pid_file).await {
-        Ok(b) => b,
-        Err(_) => return false,
-    };
-    let pid = match pid_bytes.trim().parse::<u32>() {
-        Ok(p) => p,
-        Err(_) => return false,
-    };
-    is_llama_server_pid(pid).await
+
+    !list_runtime_pids().await.is_empty()
 }
 
 pub async fn start(
     profile: Option<String>,
     port: u16,
     foreground: bool,
+    runtime: EngineRuntime,
 ) -> Result<(), color_eyre::Report> {
     let target_profile = match profile {
         Some(p) => p,
         None => {
             let presets = preset::list_presets()?;
             if presets.is_empty() {
-                eprintln!("error: no presets in ~/.config/muthr/provider.d/");
+                eprintln!("none");
+                eprintln!("info: no presets in ~/.config/muthr/provider.d/mlxcel");
+                eprintln!("info: run 'muthr init' to install default presets");
                 return Ok(());
             }
 
@@ -117,8 +253,12 @@ pub async fn start(
         }
     };
 
-    let preset_path = preset::resolve_preset(&target_profile)
-        .ok_or_else(|| color_eyre::eyre::eyre!("preset not found: {}", target_profile))?;
+    let preset_path = preset::resolve_preset(&target_profile).ok_or_else(|| {
+        color_eyre::eyre::eyre!(
+            "preset not found: {} (run 'muthr init' to install default presets)",
+            target_profile
+        )
+    })?;
 
     apply_vram_limits(foreground).await;
 
@@ -128,22 +268,60 @@ pub async fn start(
 
     let tmp_preset = cache_dir.join("active-preset.ini");
     let raw_content = fs::read_to_string(&preset_path).await?;
-    let expanded = raw_content.replace("~", &home);
+    let mut expanded_lines: Vec<String> = Vec::new();
+    for line in raw_content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            expanded_lines.push(line.to_string());
+            continue;
+        }
+
+        if let Some(eq_pos) = line.find('=') {
+            let key = line[..eq_pos].trim().to_ascii_lowercase();
+            let is_path_like = key == "model" || key == "path" || key.ends_with("-path");
+            if is_path_like {
+                let value = line[eq_pos + 1..].trim();
+                let expanded_value = if value == "~" {
+                    Some(home.clone())
+                } else {
+                    value
+                        .strip_prefix("~/")
+                        .map(|stripped| format!("{}/{}", home, stripped))
+                };
+
+                if let Some(expanded_value) = expanded_value {
+                    expanded_lines.push(format!(
+                        "{} = {}",
+                        line[..eq_pos].trim_end(),
+                        expanded_value
+                    ));
+                    continue;
+                }
+            }
+        }
+
+        expanded_lines.push(line.to_string());
+    }
+
+    let expanded = expanded_lines.join("\n");
     fs::write(&tmp_preset, expanded).await?;
-    fs::write(cache_dir.join("active-preset-name"), &target_profile).await?;
+    fs::write(
+        cache_dir.join(runtime.active_preset_file_name()),
+        &target_profile,
+    )
+    .await?;
 
     let preset = preset::parse_preset(&tmp_preset)?;
     let bind_host = preset
         .global
         .host
+        .clone()
         .unwrap_or_else(|| "127.0.0.1".to_string());
     let server_port = preset.global.port.unwrap_or(port as u32) as u16;
 
-    let max_threads = physical_cpu_count();
-
-    let log_stdout = cache_dir.join("llama-server.log");
-    let log_stderr = cache_dir.join("llama-server-err.log");
-    let pid_file = cache_dir.join("llama-server.pid");
+    let log_stdout = cache_dir.join(runtime.stdout_log_name());
+    let log_stderr = cache_dir.join(runtime.stderr_log_name());
+    let pid_file = cache_dir.join(runtime.pid_file_name());
 
     if !foreground && pid_file.exists() {
         let stale = || async { fs::remove_file(&pid_file).await.ok() };
@@ -151,12 +329,12 @@ pub async fn start(
         if let Ok(pid_bytes) = fs::read_to_string(&pid_file).await
             && let Ok(old_pid) = pid_bytes.trim().parse::<u32>()
         {
-            if is_llama_server_pid(old_pid).await {
+            if is_runtime_pid(old_pid).await {
                 eprintln!(
                     "warning: server already running (pid {}), stopping first",
                     old_pid
                 );
-                let _ = stop().await;
+                let _ = stop(runtime).await;
                 fs::remove_file(&pid_file).await.ok();
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
             } else {
@@ -165,106 +343,15 @@ pub async fn start(
         }
     }
 
-    let mut args: Vec<String> = vec![
-        "--host".to_string(),
-        bind_host.clone(),
-        "--port".to_string(),
-        server_port.to_string(),
-        "--reuse-port".to_string(),
-        "--prio".to_string(),
-        "2".to_string(),
-        "--n-gpu-layers".to_string(),
-        preset.global.n_gpu_layers.to_string(),
-    ];
-
-    if preset.global.flash_attn {
-        args.push("--flash-attn".to_string());
-        args.push("on".to_string());
-    }
-    if preset.global.mlock {
-        args.push("--mlock".to_string());
-    }
-
-    if let Some(slot) = preset.slots.first() {
-        if let Some(model_path) = &slot.model_path {
-            let expanded_model = preset::expand_home(model_path);
-            args.push("--model".to_string());
-            args.push(expanded_model.to_string_lossy().to_string());
-        }
-
-        if let Some(ctx) = slot.ctx_size {
-            args.push("--ctx-size".to_string());
-            args.push(ctx.to_string());
-        }
-        args.push("--ctx-checkpoints".to_string());
-        args.push("0".to_string());
-        if let Some(k) = &slot.cache_type_k {
-            args.push("--cache-type-k".to_string());
-            args.push(k.clone());
-        }
-        if let Some(v) = &slot.cache_type_v {
-            args.push("--cache-type-v".to_string());
-            args.push(v.clone());
-        }
-        if let Some(cache_ram) = slot.cache_ram {
-            args.push("--cache-ram".to_string());
-            args.push(cache_ram.to_string());
-        }
-        if let Some(temp) = slot.temp {
-            args.push("--temperature".to_string());
-            args.push(temp.to_string());
-        }
-        if let Some(top_p) = slot.top_p {
-            args.push("--top-p".to_string());
-            args.push(top_p.to_string());
-        }
-        if let Some(min_p) = slot.min_p {
-            args.push("--min-p".to_string());
-            args.push(min_p.to_string());
-        }
-        if let Some(top_k) = slot.top_k {
-            args.push("--top-k".to_string());
-            args.push(top_k.to_string());
-        }
-        if let Some(rp) = slot.repeat_penalty {
-            args.push("--repeat-penalty".to_string());
-            args.push(rp.to_string());
-        }
-        if slot.jinja == Some(true) {
-            args.push("--jinja".to_string());
-        }
-        if let Some(parallel) = slot.parallel {
-            args.push("--parallel".to_string());
-            args.push(parallel.to_string());
-        }
-    }
-
-    if let Some(b) = preset.global.batch_size {
-        args.push("--batch-size".to_string());
-        args.push(b.to_string());
-    }
-    if let Some(ub) = preset.global.ubatch_size {
-        args.push("--ubatch-size".to_string());
-        args.push(ub.to_string());
-    }
-    if let Some(t) = preset.global.threads {
-        let clamped = clamp_threads(t, max_threads);
-        args.push("--threads".to_string());
-        args.push(clamped.to_string());
-    }
-    if let Some(tb) = preset.global.threads_batch {
-        let clamped = clamp_threads(tb, max_threads);
-        args.push("--threads-batch".to_string());
-        args.push(clamped.to_string());
-    }
+    let args = build_mlxcel_args(&preset, bind_host.clone(), server_port)?;
 
     if foreground {
         eprintln!(
-            "info: llama-server starting on {}:{}",
-            bind_host, server_port
+            "info: {} starting on {}:{}",
+            runtime, bind_host, server_port
         );
 
-        let mut child = AsyncCommand::new("llama-server")
+        let mut child = AsyncCommand::new(runtime.executable())
             .args(&args)
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
@@ -277,8 +364,8 @@ pub async fn start(
         Ok(())
     } else {
         eprintln!(
-            "llama-server starting (background) on {}:{}",
-            bind_host, server_port
+            "{} starting (background) on {}:{}",
+            runtime, bind_host, server_port
         );
 
         let stdout_file = std::fs::OpenOptions::new()
@@ -290,7 +377,7 @@ pub async fn start(
             .append(true)
             .open(&log_stderr)?;
 
-        let mut cmd = std::process::Command::new("llama-server");
+        let mut cmd = std::process::Command::new(runtime.executable());
         cmd.args(&args).stdout(stdout_file).stderr(stderr_file);
 
         unsafe {
@@ -314,37 +401,114 @@ pub async fn start(
     }
 }
 
-pub async fn stop() -> Result<(), color_eyre::Report> {
+fn build_mlxcel_args(
+    preset: &preset::Preset,
+    bind_host: String,
+    server_port: u16,
+) -> Result<Vec<String>, color_eyre::Report> {
+    let mut args: Vec<String> = Vec::new();
+
+    if let Some(slot) = preset.slots.first()
+        && let Some(model_path) = &slot.model_path
+    {
+        let expanded_model = preset::expand_home(model_path);
+        args.push("-m".to_string());
+        args.push(expanded_model.to_string_lossy().to_string());
+    } else {
+        return Err(color_eyre::eyre::eyre!(
+            "preset '{}' has no model configured; define 'model = ...' in the first slot",
+            preset.name
+        ));
+    }
+
+    args.push("--host".to_string());
+    args.push(bind_host);
+    args.push("--port".to_string());
+    args.push(server_port.to_string());
+
+    if let Some(slot) = preset.slots.first() {
+        if let Some(max_out) = slot.max_output_tokens {
+            args.push("--predict".to_string());
+            args.push(max_out.to_string());
+        }
+        if let Some(temp) = slot.temp {
+            args.push("--temp".to_string());
+            args.push(temp.to_string());
+        }
+        if let Some(top_p) = slot.top_p {
+            args.push("--top-p".to_string());
+            args.push(top_p.to_string());
+        }
+        if let Some(top_k) = slot.top_k {
+            args.push("--top-k".to_string());
+            args.push(top_k.to_string());
+        }
+        if let Some(min_p) = slot.min_p {
+            args.push("--min-p".to_string());
+            args.push(min_p.to_string());
+        }
+        if let Some(rp) = slot.repeat_penalty {
+            args.push("--repeat-penalty".to_string());
+            args.push(rp.to_string());
+        }
+    }
+
+    Ok(args)
+}
+
+pub async fn stop(runtime: EngineRuntime) -> Result<(), color_eyre::Report> {
     let home = std::env::var("HOME")?;
     let cache_dir = PathBuf::from(&home).join(".cache/muthr");
-    let pid_file = cache_dir.join("llama-server.pid");
+    let pid_file = cache_dir.join(runtime.pid_file_name());
 
-    if !pid_file.exists() {
-        return Ok(());
+    let mut target_pids = Vec::new();
+    if pid_file.exists()
+        && let Ok(pid_bytes) = fs::read_to_string(&pid_file).await
+        && let Ok(pid) = pid_bytes.trim().parse::<u32>()
+    {
+        if is_runtime_pid(pid).await {
+            target_pids.push(pid);
+        } else {
+            eprintln!(
+                "warning: stale pid file for non-{} process {}, removing",
+                runtime, pid,
+            );
+        }
     }
 
-    let pid_bytes = fs::read_to_string(&pid_file).await?;
-    let pid = pid_bytes.trim().parse::<u32>()?;
+    for pid in list_runtime_pids().await {
+        if !target_pids.contains(&pid) {
+            target_pids.push(pid);
+        }
+    }
 
-    if !is_llama_server_pid(pid).await {
-        eprintln!(
-            "warning: stale pid file for non-llama process {}, removing",
-            pid
-        );
+    if target_pids.is_empty() {
         fs::remove_file(&pid_file).await.ok();
         return Ok(());
     }
 
+    for pid in target_pids {
+        stop_pid(pid, runtime).await;
+    }
+
+    fs::remove_file(&pid_file).await.ok();
+    Ok(())
+}
+
+pub async fn stop_all() -> Result<(), color_eyre::Report> {
+    stop(EngineRuntime::Mlxcel).await?;
+    Ok(())
+}
+
+async fn stop_pid(pid: u32, runtime: EngineRuntime) {
     if !is_process_alive(pid) {
-        fs::remove_file(&pid_file).await.ok();
-        return Ok(());
+        return;
     }
 
-    eprintln!("info: stopping pid {}", pid);
-    let _ = AsyncCommand::new("kill")
-        .args(["-15", &pid.to_string()])
-        .output()
-        .await;
+    eprintln!("info: stopping {} pid {}", runtime, pid);
+    unsafe {
+        libc::kill(pid as i32, libc::SIGTERM);
+    }
 
     let mut died = false;
     for _ in 0..30 {
@@ -356,35 +520,37 @@ pub async fn stop() -> Result<(), color_eyre::Report> {
     }
 
     if died {
-        eprintln!("info: stopped");
+        eprintln!("info: stopped {} pid {}", runtime, pid);
     } else {
-        eprintln!("warning: sigterm failed, escalating to sigkill");
-        let _ = AsyncCommand::new("kill")
-            .args(["-9", &pid.to_string()])
-            .output()
-            .await;
-        eprintln!("info: killed");
+        eprintln!(
+            "warning: sigterm failed for {} pid {}, escalating to sigkill",
+            runtime, pid
+        );
+        unsafe {
+            libc::kill(pid as i32, libc::SIGKILL);
+        }
+        eprintln!("info: killed {} pid {}", runtime, pid);
     }
-
-    fs::remove_file(&pid_file).await.ok();
-    Ok(())
 }
 
 pub async fn status(output: crate::OutputFormat) -> Result<(), color_eyre::Report> {
     let home = std::env::var("HOME")?;
-    let name_path = PathBuf::from(&home).join(".cache/muthr/active-preset-name");
+    let cache_dir = PathBuf::from(&home).join(".cache/muthr");
 
-    let preset_name = fs::read_to_string(&name_path)
-        .await
-        .ok()
-        .map(|s| s.trim().to_string())
-        .unwrap_or_default();
+    let mlxcel_preset_name =
+        fs::read_to_string(cache_dir.join(EngineRuntime::Mlxcel.active_preset_file_name()))
+            .await
+            .ok()
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
 
-    let is_server_running = is_running().await;
+    let mlxcel_running = is_running(EngineRuntime::Mlxcel).await;
+    let any_running = mlxcel_running;
+    let any_preset = !mlxcel_preset_name.is_empty();
 
-    let overall_state = if preset_name.is_empty() {
+    let overall_state = if !any_preset {
         "not_configured"
-    } else if is_server_running {
+    } else if any_running {
         "running"
     } else {
         "configured_stopped"
@@ -393,65 +559,71 @@ pub async fn status(output: crate::OutputFormat) -> Result<(), color_eyre::Repor
     if output == crate::OutputFormat::Json || output == crate::OutputFormat::Ndjson {
         let payload = serde_json::json!({
             "state": overall_state,
-            "preset": if preset_name.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(preset_name.clone()) },
-            "server_running": is_server_running,
+            "mlxcel": {
+                "preset": if mlxcel_preset_name.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(mlxcel_preset_name.clone()) },
+                "server_running": mlxcel_running,
+            }
         });
         println!("{}", serde_json::to_string(&payload)?);
         return Ok(());
     }
 
-    if preset_name.is_empty() {
+    if !any_preset {
         eprintln!("muthr: not configured");
-    } else if is_server_running {
+    } else if any_running {
         eprintln!("muthr: running");
     } else {
         eprintln!("muthr: configured, stopped");
     }
 
-    if preset_name.is_empty() {
-        eprintln!("  engine          (none)");
-    } else {
-        let preset =
-            preset::resolve_preset(&preset_name).and_then(|p| preset::parse_preset(&p).ok());
-        let profile_label = preset
-            .as_ref()
-            .map(|p| p.name.as_str())
-            .unwrap_or_else(|| preset_name.as_str());
-        eprintln!("  engine          active      {}", profile_label);
-    }
+    print_runtime_status(EngineRuntime::Mlxcel, &mlxcel_preset_name, mlxcel_running);
 
-    if is_server_running {
-        eprintln!("  server          running");
-    } else {
-        eprintln!("  server          stopped");
-    }
-
-    let services_vm = "muthr-services";
-    let services_output = AsyncCommand::new("limactl")
-        .args(["ls", "-f", "{{.Status}}", services_vm])
+    let services_container = "muthr-services";
+    let searxng_container = "muthr-searxng";
+    let container_items = AsyncCommand::new("container")
+        .args(["list", "--all", "--format", "json"])
         .output()
         .await
-        .ok();
+        .ok()
+        .filter(|out| out.status.success())
+        .and_then(|out| serde_json::from_slice::<Vec<serde_json::Value>>(&out.stdout).ok())
+        .unwrap_or_default();
 
-    let services_status = match services_output {
-        Some(out) if out.status.success() => {
-            let raw = String::from_utf8_lossy(&out.stdout);
-            if raw.contains("Running") {
-                Some("running")
-            } else {
-                Some("stopped")
-            }
+    let mut services_status: Option<&str> = None;
+    for item in &container_items {
+        let id = item
+            .get("id")
+            .and_then(|v| v.as_str())
+            .or_else(|| {
+                item.get("configuration")
+                    .and_then(|v| v.get("id"))
+                    .and_then(|v| v.as_str())
+            })
+            .unwrap_or_default();
+        if id != services_container {
+            continue;
         }
-        _ => None,
-    };
+        let state = item
+            .get("status")
+            .and_then(|v| v.get("state"))
+            .and_then(|v| v.as_str())
+            .or_else(|| item.get("state").and_then(|v| v.as_str()))
+            .unwrap_or("unknown");
+        services_status = Some(if state.eq_ignore_ascii_case("running") {
+            "running"
+        } else {
+            "stopped"
+        });
+        break;
+    }
 
     if let Some(status) = services_status {
-        eprintln!("  services vm      {}     {}", services_vm, status);
+        eprintln!("  services mcp     {}     {}", services_container, status);
 
-        let provision_output = AsyncCommand::new("limactl")
+        let provision_output = AsyncCommand::new("container")
             .args([
-                "shell",
-                services_vm,
+                "exec",
+                services_container,
                 "bash",
                 "-c",
                 "test -f $HOME/mcp-stdio.sh && test -f $HOME/.local/lib/node_modules/mcp-searxng/dist/cli.js",
@@ -470,48 +642,96 @@ pub async fn status(output: crate::OutputFormat) -> Result<(), color_eyre::Repor
         }
     }
 
-    let sandbox_output = AsyncCommand::new("limactl")
-        .args(["ls", "-f", "{{.Name}} {{.Status}}"])
-        .output()
-        .await;
-
-    if let Ok(ref out) = sandbox_output {
-        let stdout_str = String::from_utf8_lossy(&out.stdout);
-        let mut active_sandboxes: Vec<(String, String)> = Vec::new();
-
-        for line in stdout_str.lines() {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 2 {
-                let vm_name = parts[0];
-                let vm_status = parts[1];
-
-                if vm_name.starts_with("muthr-") && vm_name != "muthr-services" {
-                    let project_token = vm_name.strip_prefix("muthr-").unwrap_or(vm_name);
-                    active_sandboxes.push((project_token.to_string(), vm_status.to_string()));
-                }
-            }
+    let mut searxng_status: Option<&str> = None;
+    for item in &container_items {
+        let id = item
+            .get("id")
+            .and_then(|v| v.as_str())
+            .or_else(|| {
+                item.get("configuration")
+                    .and_then(|v| v.get("id"))
+                    .and_then(|v| v.as_str())
+            })
+            .unwrap_or_default();
+        if id != searxng_container {
+            continue;
         }
+        let state = item
+            .get("status")
+            .and_then(|v| v.get("state"))
+            .and_then(|v| v.as_str())
+            .or_else(|| item.get("state").and_then(|v| v.as_str()))
+            .unwrap_or("unknown");
+        searxng_status = Some(if state.eq_ignore_ascii_case("running") {
+            "running"
+        } else {
+            "stopped"
+        });
+        break;
+    }
 
-        if !active_sandboxes.is_empty() {
-            eprintln!("  sandboxes");
-            for (i, (token, status)) in active_sandboxes.iter().enumerate() {
-                let connector = if i + 1 == active_sandboxes.len() {
-                    "    └─"
-                } else {
-                    "    ├─"
-                };
-                eprintln!("{} {:<20} {}", connector, token, status);
-            }
+    if let Some(status) = searxng_status {
+        eprintln!("  services searxng {}     {}", searxng_container, status);
+    }
+
+    let mut active_sandboxes: Vec<(String, String)> = Vec::new();
+
+    for row in list_container_sandboxes().await {
+        if !active_sandboxes.iter().any(|(t, _)| *t == row.0) {
+            active_sandboxes.push(row);
+        }
+    }
+
+    if !active_sandboxes.is_empty() {
+        eprintln!("  sandboxes");
+        for (i, (token, status)) in active_sandboxes.iter().enumerate() {
+            let connector = if i + 1 == active_sandboxes.len() {
+                "    └─"
+            } else {
+                "    ├─"
+            };
+            eprintln!("{} {:<20} {}", connector, token, status);
         }
     }
 
     Ok(())
 }
 
-pub fn presets(output: crate::OutputFormat) -> Result<(), color_eyre::Report> {
+fn print_runtime_status(runtime: EngineRuntime, preset_name: &str, is_running: bool) {
+    if preset_name.is_empty() {
+        eprintln!("  engine {:<10} (none)", runtime);
+    } else {
+        let preset =
+            preset::resolve_preset(preset_name).and_then(|p| preset::parse_preset(&p).ok());
+        let profile_label = preset
+            .as_ref()
+            .map(|p| p.name.as_str())
+            .unwrap_or(preset_name);
+        eprintln!("  engine {:<10} active      {}", runtime, profile_label);
+    }
+
+    if is_running {
+        eprintln!("  server {:<10} running", runtime);
+    } else {
+        eprintln!("  server {:<10} stopped", runtime);
+    }
+}
+
+pub fn presets(
+    output: crate::OutputFormat,
+    _runtime: EngineRuntime,
+) -> Result<(), color_eyre::Report> {
+    let runtime = EngineRuntime::Mlxcel;
     let presets = preset::list_presets()?;
     if presets.is_empty() {
-        eprintln!("error: no presets in ~/.config/muthr/provider.d/");
+        if output == crate::OutputFormat::Json {
+            println!("[]");
+        } else if output == crate::OutputFormat::Ndjson {
+        } else {
+            eprintln!("none");
+            eprintln!("info: no presets in ~/.config/muthr/provider.d/{}", runtime);
+            eprintln!("info: run 'muthr init' to install default presets");
+        }
         return Ok(());
     }
 
@@ -520,9 +740,9 @@ pub fn presets(output: crate::OutputFormat) -> Result<(), color_eyre::Report> {
             .iter()
             .map(|p| {
                 serde_json::json!({
-                    "name": p.name,
-                    "path": p.path.to_string_lossy().to_string(),
-                    "slots": p.slots.len(),
+                    "id": format!("{}/{}.ini", runtime.as_str(), p.name),
+                    "runtime": runtime.as_str(),
+                    "file": format!("{}.ini", p.name),
                 })
             })
             .collect();
@@ -533,38 +753,17 @@ pub fn presets(output: crate::OutputFormat) -> Result<(), color_eyre::Report> {
     if output == crate::OutputFormat::Ndjson {
         for p in &presets {
             let payload = serde_json::json!({
-                "name": p.name,
-                "path": p.path.to_string_lossy().to_string(),
-                "slots": p.slots.len(),
+                "id": format!("{}/{}.ini", runtime.as_str(), p.name),
+                "runtime": runtime.as_str(),
+                "file": format!("{}.ini", p.name),
             });
             println!("{}", serde_json::to_string(&payload)?);
         }
         return Ok(());
     }
 
-    let mut rows: Vec<Vec<String>> = Vec::new();
     for p in &presets {
-        rows.push(vec![
-            p.name.clone(),
-            p.path.to_string_lossy().to_string(),
-            p.slots.len().to_string(),
-        ]);
-    }
-
-    let headers = vec!["Preset", "Path", "Slots"];
-
-    match ui::select_table(&headers, &rows) {
-        Some(idx) => eprintln!("{}", presets[idx].name),
-        None => {
-            for p in &presets {
-                eprintln!(
-                    "  {:<30} {} [{}]",
-                    p.name,
-                    p.path.to_string_lossy(),
-                    p.slots.len()
-                );
-            }
-        }
+        eprintln!("{}/{}.ini", runtime.as_str(), p.name);
     }
 
     Ok(())
@@ -592,22 +791,27 @@ async fn apply_vram_limits(_foreground: bool) {
             wired_mb, gb
         );
 
-        let status = AsyncCommand::new("sudo")
-            .args([
-                "sysctl",
-                "-w",
-                &format!("iogpu.wired_limit_mb={}", wired_mb),
-            ])
-            .stdin(Stdio::inherit())
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
-            .status()
-            .await;
+        let status = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            AsyncCommand::new("sudo")
+                .args([
+                    "-n",
+                    "sysctl",
+                    "-w",
+                    &format!("iogpu.wired_limit_mb={}", wired_mb),
+                ])
+                .stdin(Stdio::null())
+                .kill_on_drop(true)
+                .stdout(Stdio::inherit())
+                .stderr(Stdio::inherit())
+                .status(),
+        )
+        .await;
 
         match status {
-            Ok(s) if s.success() => eprintln!("info: iogpu limits applied"),
+            Ok(Ok(s)) if s.success() => eprintln!("info: iogpu limits applied"),
             _ => {
-                eprintln!("warning: iogpu tuning declined or timed out");
+                eprintln!("warning: iogpu tuning skipped (sudo non-interactive unavailable)");
                 eprintln!(
                     "info: run 'sudo sysctl -w iogpu.wired_limit_mb={}' manually",
                     wired_mb

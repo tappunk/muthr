@@ -1,8 +1,26 @@
+// Copyright 2026 tappunk
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use clap::Subcommand;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
+
+use crate::engine::EngineRuntime;
+
+type ResolvedConfig = (u16, String, String, String, String, Option<String>);
 
 #[derive(Subcommand)]
 pub enum ConfigCommands {
@@ -19,37 +37,80 @@ pub struct MuthrConfig {
     pub workspace_root: Option<String>,
     pub model_dir: Option<String>,
     pub default_provision_profile: Option<String>,
+    pub default_engine_runtime: Option<String>,
+    pub container_host_gateway: Option<String>,
 }
 
 impl MuthrConfig {
-    fn resolve(self) -> (u16, String, String, String) {
+    fn resolve(self) -> Result<ResolvedConfig, color_eyre::Report> {
         let server_port = self.server_port.unwrap_or(8080);
+        let home = dirs::home_dir()
+            .map(|p| p.to_string_lossy().to_string())
+            .ok_or_else(|| color_eyre::eyre::eyre!("could not resolve home directory"))?;
         let workspace_root = match self.workspace_root {
             Some(v) => v,
-            None => std::env::var("HOME")
-                .ok()
-                .map(|h| format!("{}/src", h))
-                .unwrap_or_else(|| "~/src".to_string()),
+            None => format!("{}/src", home),
         };
         let model_dir = match self.model_dir {
             Some(v) => v,
-            None => std::env::var("HOME")
-                .ok()
-                .map(|h| format!("{}/opt/models", h))
-                .unwrap_or_else(|| "~/opt/models".to_string()),
+            None => format!("{}/opt/models", home),
         };
         let provision_profile = self
             .default_provision_profile
-            .unwrap_or_else(|| "base".to_string());
-        (server_port, workspace_root, model_dir, provision_profile)
+            .unwrap_or_else(|| "opencode".to_string());
+        let engine_runtime = self
+            .default_engine_runtime
+            .unwrap_or_else(|| "mlxcel".to_string());
+        let container_host_gateway = self.container_host_gateway;
+        Ok((
+            server_port,
+            workspace_root,
+            model_dir,
+            provision_profile,
+            engine_runtime,
+            container_host_gateway,
+        ))
+    }
+
+    pub fn resolved_engine_runtime(&self) -> Result<EngineRuntime, color_eyre::Report> {
+        match self
+            .default_engine_runtime
+            .as_deref()
+            .unwrap_or("mlxcel")
+            .trim()
+        {
+            "mlxcel" => Ok(EngineRuntime::Mlxcel),
+            other => Err(color_eyre::eyre::eyre!(
+                "invalid default_engine_runtime '{}'; expected 'mlxcel'",
+                other
+            )),
+        }
     }
 
     pub fn print_resolved(&self) {
-        let (server_port, workspace_root, model_dir, provision_profile) = self.clone().resolve();
+        let (
+            server_port,
+            workspace_root,
+            model_dir,
+            provision_profile,
+            engine_runtime,
+            container_host_gateway,
+        ) = match self.clone().resolve() {
+            Ok(v) => v,
+            Err(err) => {
+                eprintln!("error: {}", err);
+                return;
+            }
+        };
         eprintln!("info: server_port       {}", server_port);
         eprintln!("info: workspace_root    {}", workspace_root);
         eprintln!("info: model_dir         {}", model_dir);
         eprintln!("info: provision_profile {}", provision_profile);
+        eprintln!("info: engine_runtime    {}", engine_runtime);
+        eprintln!(
+            "info: container_gateway {}",
+            container_host_gateway.unwrap_or_else(|| "<auto>".to_string())
+        );
     }
 }
 
@@ -76,6 +137,12 @@ pub fn load() -> Result<MuthrConfig, color_eyre::Report> {
     if let Ok(v) = std::env::var("MUTHR_PROVISION_PROFILE") {
         config.default_provision_profile = Some(v);
     }
+    if let Ok(v) = std::env::var("MUTHR_ENGINE_RUNTIME") {
+        config.default_engine_runtime = Some(v);
+    }
+    if let Ok(v) = std::env::var("MUTHR_CONTAINER_HOST_GATEWAY") {
+        config.container_host_gateway = Some(v);
+    }
 
     Ok(config)
 }
@@ -96,7 +163,8 @@ pub fn init_config(force: bool) -> Result<(), color_eyre::Report> {
 server_port = 8080
 workspace_root = "~/src"
 model_dir = "~/opt/models"
-default_provision_profile = "base"
+default_provision_profile = "opencode"
+default_engine_runtime = "mlxcel"
 "##;
 
     fs::write(&config_path, template)?;

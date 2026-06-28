@@ -1,3 +1,17 @@
+// Copyright 2026 tappunk
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -8,29 +22,17 @@ pub struct Slot {
     pub index: u8,
     pub name: String,
     pub model_path: Option<PathBuf>,
-    pub ctx_size: Option<u32>,
-    pub cache_type_k: Option<String>,
-    pub cache_type_v: Option<String>,
-    pub cache_ram: Option<u32>,
     pub temp: Option<f32>,
     pub top_p: Option<f32>,
     pub min_p: Option<f32>,
     pub top_k: Option<u32>,
     pub repeat_penalty: Option<f32>,
     pub load_on_startup: bool,
-    pub jinja: Option<bool>,
-    pub parallel: Option<u32>,
+    pub max_output_tokens: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct GlobalSettings {
-    pub n_gpu_layers: i32,
-    pub flash_attn: bool,
-    pub mlock: bool,
-    pub batch_size: Option<u32>,
-    pub ubatch_size: Option<u32>,
-    pub threads: Option<u32>,
-    pub threads_batch: Option<u32>,
     pub host: Option<String>,
     pub port: Option<u32>,
 }
@@ -70,10 +72,6 @@ fn parse_slot_section(
         index,
         name,
         model_path: values.get("model").map(PathBuf::from),
-        ctx_size: values.get("ctx-size").and_then(|v| v.trim().parse().ok()),
-        cache_type_k: values.get("cache-type-k").cloned(),
-        cache_type_v: values.get("cache-type-v").cloned(),
-        cache_ram: values.get("cache-ram").and_then(|v| v.trim().parse().ok()),
         temp: values.get("temp").and_then(|v| v.trim().parse().ok()),
         top_p: values.get("top-p").and_then(|v| v.trim().parse().ok()),
         min_p: values.get("min-p").and_then(|v| v.trim().parse().ok()),
@@ -82,38 +80,14 @@ fn parse_slot_section(
             .get("repeat-penalty")
             .and_then(|v| v.trim().parse().ok()),
         load_on_startup,
-        jinja: values.get("jinja").map(|v| v.trim() == "true"),
-        parallel: values.get("parallel").and_then(|v| v.trim().parse().ok()),
+        max_output_tokens: values
+            .get("max-output-tokens")
+            .and_then(|v| v.trim().parse().ok()),
     })
 }
 
 fn parse_global_section(values: &HashMap<String, String>) -> GlobalSettings {
-    let n_gpu_layers = values
-        .get("n-gpu-layers")
-        .and_then(|v| v.trim().parse().ok())
-        .unwrap_or(-1);
-
-    let flash_attn = values
-        .get("flash-attn")
-        .map(|v| v.trim() == "true")
-        .unwrap_or(false);
-    let mlock = values
-        .get("mlock")
-        .map(|v| v.trim() == "true")
-        .unwrap_or(false);
-
     GlobalSettings {
-        n_gpu_layers,
-        flash_attn,
-        mlock,
-        batch_size: values.get("batch-size").and_then(|v| v.trim().parse().ok()),
-        ubatch_size: values
-            .get("ubatch-size")
-            .and_then(|v| v.trim().parse().ok()),
-        threads: values.get("threads").and_then(|v| v.trim().parse().ok()),
-        threads_batch: values
-            .get("threads-batch")
-            .and_then(|v| v.trim().parse().ok()),
         host: values.get("host").cloned(),
         port: values.get("port").and_then(|v| v.trim().parse().ok()),
     }
@@ -181,7 +155,7 @@ pub fn parse_preset(path: &Path) -> Result<Preset, color_eyre::Report> {
 
 pub fn list_presets() -> Result<Vec<Preset>, color_eyre::Report> {
     let home = std::env::var("HOME")?;
-    let presets_dir = PathBuf::from(&home).join(".config/muthr/provider.d/llama-cpp");
+    let presets_dir = PathBuf::from(&home).join(".config/muthr/provider.d/mlxcel");
 
     if !presets_dir.exists() {
         return Ok(Vec::new());
@@ -205,20 +179,36 @@ pub fn list_presets() -> Result<Vec<Preset>, color_eyre::Report> {
 
 pub fn resolve_preset(name: &str) -> Option<PathBuf> {
     let home = std::env::var("HOME").ok()?;
+
+    let mut selector = name.trim();
+    if let Some(stripped) = selector.strip_prefix("mlxcel/") {
+        selector = stripped;
+    }
+    if let Some(stripped) = selector.strip_suffix(".ini") {
+        selector = stripped;
+    }
+
     let path =
-        PathBuf::from(&home).join(format!(".config/muthr/provider.d/llama-cpp/{}.ini", name));
+        PathBuf::from(&home).join(format!(".config/muthr/provider.d/mlxcel/{}.ini", selector));
     if path.exists() { Some(path) } else { None }
 }
 
 pub fn expand_home(path: &Path) -> PathBuf {
-    if path.starts_with("~")
-        && let Ok(home) = std::env::var("HOME")
-    {
-        let mut pb = PathBuf::from(home);
-        if let Ok(stripped) = path.strip_prefix("~") {
-            pb.push(stripped);
-            return pb;
-        }
+    let Some(raw) = path.to_str() else {
+        return path.to_path_buf();
+    };
+
+    let Ok(home) = std::env::var("HOME") else {
+        return path.to_path_buf();
+    };
+
+    if raw == "~" {
+        return PathBuf::from(home);
     }
+
+    if let Some(stripped) = raw.strip_prefix("~/") {
+        return PathBuf::from(home).join(stripped);
+    }
+
     path.to_path_buf()
 }

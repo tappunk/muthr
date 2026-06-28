@@ -1,3 +1,17 @@
+// Copyright 2026 tappunk
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 pub mod catalog;
 pub mod config;
 pub mod download;
@@ -13,17 +27,17 @@ pub mod ui;
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{Shell, generate};
 use serde::Serialize;
-use tokio::process::Command as AsyncCommand;
 
 use crate::config::ConfigCommands;
+use crate::engine::EngineRuntime;
 
 #[derive(Parser)]
 #[command(
     name = "muthr",
     version,
     author,
-    about = "Manage llama.cpp inference and Lima sandbox vms for local ai development",
-    long_about = "Zero-trust orchestrator for llama.cpp inference and Lima sandbox vms.\nPrerequisites: macOS arm64, Lima, llama.cpp",
+    about = "Manage inference and sandbox containers for local AI development",
+    long_about = "Zero-trust orchestrator for local inference and sandbox containers.\nPrerequisites: macOS arm64, container CLI, configured inference runtime",
     arg_required_else_help = false,
     propagate_version = true,
     trailing_var_arg = true
@@ -43,28 +57,34 @@ pub enum OutputFormat {
 
 #[derive(Subcommand)]
 enum Commands {
-    #[command(about = "Manage llama.cpp inference engine")]
+    #[command(about = "Manage inference engine")]
     Engine {
         #[command(subcommand)]
         action: EngineCommands,
     },
 
-    #[command(about = "Manage project sandbox vms")]
+    #[command(about = "Manage project sandbox containers")]
     Sandbox {
         #[command(subcommand)]
         action: SandboxCommands,
     },
 
-    #[command(about = "Manage persistent muthr-services vm")]
+    #[command(about = "Manage persistent muthr-services container")]
     Services {
         #[command(subcommand)]
         action: ServicesCommands,
     },
 
-    #[command(about = "Start inference engine and muthr-services vm")]
+    #[command(about = "Start inference engine and muthr-services container")]
     Run {
         #[arg(long, help = "Show detailed progress output during boot")]
         verbose: bool,
+        #[arg(
+            long,
+            value_enum,
+            help = "Inference runtime to start (defaults to config)"
+        )]
+        runtime: Option<EngineRuntime>,
         #[arg(short, long, help = "Skip confirmation prompts")]
         yes: bool,
         #[arg(short = 'n', long, help = "Preview actions without side effects")]
@@ -87,11 +107,11 @@ enum Commands {
         dry_run: bool,
     },
 
-    #[command(about = "Download gguf model from huggingface")]
+    #[command(about = "Download model files from huggingface")]
     Download {
-        #[arg(help = "Hugging Face repository (repo/name) or explicit resolve URL")]
+        #[arg(help = "Hugging Face repository (repo/name) or explicit Hugging Face URL")]
         source: String,
-        #[arg(help = "Target GGUF filename (required when using repository syntax)")]
+        #[arg(help = "Target filename when downloading a single file")]
         file: Option<String>,
         #[arg(short, long, value_enum, default_value_t = OutputFormat::Text)]
         output: OutputFormat,
@@ -129,27 +149,27 @@ enum Commands {
 
 #[derive(Subcommand)]
 pub enum ServicesCommands {
-    #[command(about = "Start muthr-services vm")]
+    #[command(about = "Start muthr-services container")]
     Start {
         #[arg(short = 'n', long, help = "Preview actions without side effects")]
         dry_run: bool,
     },
-    #[command(about = "Stop muthr-services vm")]
+    #[command(about = "Stop muthr-services container")]
     Stop {
         #[arg(short = 'n', long, help = "Preview actions without side effects")]
         dry_run: bool,
     },
-    #[command(about = "Show muthr-services vm status")]
+    #[command(about = "Show muthr-services container status")]
     Status {
         #[arg(short, long, value_enum, default_value_t = OutputFormat::Text)]
         output: OutputFormat,
     },
-    #[command(about = "Restart muthr-services vm")]
+    #[command(about = "Restart muthr-services container")]
     Restart {
         #[arg(short = 'n', long, help = "Preview actions without side effects")]
         dry_run: bool,
     },
-    #[command(about = "Delete muthr-services vm")]
+    #[command(about = "Delete muthr-services container")]
     Delete {
         #[arg(long, help = "Skip confirmation prompt")]
         force: bool,
@@ -162,7 +182,7 @@ pub enum ServicesCommands {
 
 #[derive(Subcommand)]
 pub enum EngineCommands {
-    #[command(about = "Start llama.cpp inference engine")]
+    #[command(about = "Start inference engine runtime")]
     Start {
         #[arg(long, help = "Name of the target preset profile to load")]
         profile: Option<String>,
@@ -176,9 +196,14 @@ pub enum EngineCommands {
             help = "Run in foreground (blocking mode) instead of as a background daemon"
         )]
         foreground: bool,
+        #[arg(long, value_enum, default_value_t = EngineRuntime::Mlxcel, hide = true)]
+        runtime: EngineRuntime,
     },
-    #[command(about = "Stop inference engine")]
-    Stop,
+    #[command(about = "Stop inference engine runtime")]
+    Stop {
+        #[arg(long, value_enum, help = "Target runtime", hide = true)]
+        runtime: Option<EngineRuntime>,
+    },
     #[command(about = "Show engine status")]
     Status {
         #[arg(short, long, value_enum, default_value_t = OutputFormat::Text)]
@@ -188,22 +213,24 @@ pub enum EngineCommands {
     Presets {
         #[arg(short, long, value_enum, default_value_t = OutputFormat::Text)]
         output: OutputFormat,
+        #[arg(long, value_enum, default_value_t = EngineRuntime::Mlxcel, hide = true)]
+        runtime: EngineRuntime,
     },
 }
 
 #[derive(Subcommand)]
 pub enum SandboxCommands {
-    #[command(about = "Start sandbox vm for current project")]
+    #[command(about = "Start sandbox container for current project")]
     Start {
         #[arg(
             long,
-            help = "Profile to apply (base, opencode, hermes-agent; listed from provision.d/)"
+            help = "Profile to apply (run without --profile to list available profiles)"
         )]
         profile: Option<String>,
     },
-    #[command(about = "Stop active sandbox vm")]
+    #[command(about = "Stop active sandbox container")]
     Stop,
-    #[command(about = "Delete active sandbox vm")]
+    #[command(about = "Delete active sandbox container")]
     Delete {
         #[arg(long, help = "Skip confirmation prompt")]
         force: bool,
@@ -212,7 +239,7 @@ pub enum SandboxCommands {
         #[arg(short = 'n', long, help = "Preview actions without side effects")]
         dry_run: bool,
     },
-    #[command(about = "List sandbox vms")]
+    #[command(about = "List sandbox containers")]
     Ls {
         #[arg(short, long, value_enum, default_value_t = OutputFormat::Text)]
         output: OutputFormat,
@@ -225,39 +252,32 @@ async fn main() -> color_eyre::Result<()> {
     run().await
 }
 
-async fn boot(verbose: bool) -> Result<(), color_eyre::Report> {
+async fn boot(
+    verbose: bool,
+    runtime_override: Option<EngineRuntime>,
+) -> Result<(), color_eyre::Report> {
     sandbox::cleanup_untracked_vms(verbose).await?;
 
-    if engine::is_running().await {
+    let cfg = config::load()?;
+    let runtime = match runtime_override {
+        Some(r) => r,
+        None => cfg.resolved_engine_runtime()?,
+    };
+
+    if engine::is_running(runtime).await {
         eprintln!("info: engine already running");
     } else {
         if verbose {
-            eprintln!("info: starting inference engine");
+            eprintln!("info: starting inference engine ({})", runtime);
         }
-        let cfg = config::load()?;
         let server_port = cfg.server_port.unwrap_or(8080);
-        engine::start(None, server_port, false).await?;
+        engine::start(None, server_port, false, runtime).await?;
     }
 
-    let vm_name = "muthr-services";
-    let output = AsyncCommand::new("limactl")
-        .args(["ls", "-f", "{{.Status}}", vm_name])
-        .output()
-        .await
-        .ok();
-    let running = match output {
-        Some(out) if out.status.success() => {
-            String::from_utf8_lossy(&out.stdout).trim() == "Running"
-        }
-        _ => false,
-    };
-
-    if !running {
-        if verbose {
-            eprintln!("info: starting muthr-services vm");
-        }
-        services::start(false).await?;
+    if verbose {
+        eprintln!("info: ensuring muthr-services is running");
     }
+    services::start(false).await?;
 
     Ok(())
 }
@@ -272,41 +292,53 @@ async fn run() -> Result<(), color_eyre::Report> {
                 profile,
                 engine_server_port,
                 foreground,
+                runtime,
             } => {
                 let cfg = config::load()?;
                 let server_port = engine_server_port.unwrap_or(cfg.server_port.unwrap_or(8080));
-                engine::start(profile, server_port, foreground).await?
+                engine::start(profile, server_port, foreground, runtime).await?
             }
             EngineCommands::Status { output } => engine::status(output).await?,
-            EngineCommands::Stop => engine::stop().await?,
-            EngineCommands::Presets { output } => engine::presets(output)?,
+            EngineCommands::Stop { runtime } => match runtime {
+                Some(r) => engine::stop(r).await?,
+                None => engine::stop_all().await?,
+            },
+            EngineCommands::Presets { output, runtime } => engine::presets(output, runtime)?,
         },
         Some(Commands::Sandbox { action }) => match action {
             SandboxCommands::Start { profile } => {
                 let home = std::env::var("HOME")?;
                 let config_dir = std::path::PathBuf::from(&home).join(".config/muthr");
+                let cfg = config::load()?;
+                let default_profile = cfg
+                    .default_provision_profile
+                    .unwrap_or_else(|| "opencode".to_string());
 
                 let profiles = catalog::list_profiles(&config_dir)?;
                 let all_profiles: Vec<String> = std::iter::once("base".to_string())
                     .chain(profiles.iter().map(|p| p.name.clone()))
                     .collect();
 
-                let (vm_name, _, _) = sandbox::resolve_workspace_context()?;
-                let vm_exists = !vm_name.is_empty() && sandbox::vm_exists(&vm_name).await;
+                let (container_id, _, _) = sandbox::resolve_workspace_context()?;
+                let sandbox_exists =
+                    !container_id.is_empty() && sandbox::sandbox_exists(&container_id).await;
 
                 let profile_name = match profile {
                     Some(p) => p,
-                    None if vm_exists => "base".to_string(),
+                    None
+                        if sandbox_exists
+                            && !all_profiles.iter().any(|name| name == &default_profile) =>
+                    {
+                        "base".to_string()
+                    }
+                    None if all_profiles.iter().any(|name| name == &default_profile) => {
+                        default_profile
+                    }
+                    None if sandbox_exists => "base".to_string(),
                     None => {
                         let mut items: Vec<String> = Vec::new();
                         for name in &all_profiles {
-                            let desc = match name.as_str() {
-                                "base" => "Minimal VM — drops into shell",
-                                "opencode" => "Opencode AI — fully configured with muthr-services",
-                                "hermes-agent" => "Hermes Agent — drops into shell after install",
-                                _ => "",
-                            };
-                            items.push(format!("  {}) {:<15} {}", items.len() + 1, name, desc));
+                            items.push(format!("  {}) {}", items.len() + 1, name));
                         }
                         for item in &items {
                             eprintln!("{}", item);
@@ -346,18 +378,19 @@ async fn run() -> Result<(), color_eyre::Report> {
                     eprintln!("info: dry run, skipping sandbox deletion");
                     return Ok(());
                 }
-                let (vm_name, _, _) = sandbox::resolve_workspace_context()?;
-                if vm_name.is_empty() || vm_name == "muthr-config" {
+                let (container_id, _, _) = sandbox::resolve_workspace_context()?;
+                if container_id.is_empty() || container_id == "muthr-config" {
                     eprintln!("error: must be inside a project directory");
                     std::process::exit(64);
                 }
-                sandbox::delete_vm(&vm_name, force || yes).await?
+                sandbox::delete_sandbox(&container_id, force || yes).await?
             }
             SandboxCommands::Ls { output } => sandbox::ls(output).await?,
         },
         Some(Commands::Services { action }) => services::run(action).await?,
         Some(Commands::Run {
             verbose,
+            runtime,
             yes: _,
             dry_run,
         }) => {
@@ -365,7 +398,7 @@ async fn run() -> Result<(), color_eyre::Report> {
                 eprintln!("info: dry run, skipping run actions");
                 return Ok(());
             }
-            boot(verbose).await?
+            boot(verbose, runtime).await?
         }
         Some(Commands::Shutdown {
             verbose,
