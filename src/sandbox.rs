@@ -1,113 +1,23 @@
-use serde::{Deserialize, Serialize};
-use std::io::{IsTerminal, Write};
+// Copyright 2026 tappunk
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use tempfile::NamedTempFile;
 use tokio::fs;
-use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
-
-const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct LimaManifest {
-    minimum_lima_version: String,
-    vm_type: String,
-    mount_type: String,
-    images: Vec<LimaImage>,
-    cpus: Option<u32>,
-    memory: Option<String>,
-    disk: Option<String>,
-    mounts: Option<Vec<LimaMount>>,
-    upgrade_packages: Option<bool>,
-    containerd: Option<LimaContainerd>,
-    ssh: Option<LimaSsh>,
-    host_resolver: Option<LimaHostResolver>,
-    provision: Option<Vec<LimaProvision>>,
-    port_forwards: Option<Vec<LimaPortForward>>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct LimaImage {
-    location: String,
-    arch: String,
-    digest: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct LimaMount {
-    location: String,
-    mount_point: String,
-    writable: Option<bool>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct LimaContainerd {
-    user: Option<bool>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct LimaSsh {
-    forward_agent: Option<bool>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct LimaHostResolver {
-    enabled: Option<bool>,
-    ipv6: Option<bool>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct LimaProvision {
-    mode: String,
-    script: String,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct LimaPortForward {
-    guest_port: u16,
-    host_port: u16,
-}
-
-fn parse_manifest_yaml(content: &str) -> Result<LimaManifest, color_eyre::Report> {
-    if content.len() > MAX_MANIFEST_BYTES {
-        return Err(color_eyre::eyre::eyre!(
-            "manifest exceeds max size: {} bytes",
-            MAX_MANIFEST_BYTES
-        ));
-    }
-
-    serde_yaml::from_str(content)
-        .map_err(|e| color_eyre::eyre::eyre!("invalid manifest yaml: {}", e))
-}
-
-fn update_mount_placeholders(manifest: &mut LimaManifest, host_workspace: &str, guest_mount: &str) {
-    if let Some(mounts) = manifest.mounts.as_mut() {
-        for mount in mounts {
-            if mount.location == "__WORKSPACE_ROOT__" {
-                mount.location = host_workspace.to_string();
-            }
-
-            if mount.mount_point == "__MOUNT_POINT__" {
-                mount.mount_point = guest_mount.to_string();
-            }
-        }
-    }
-}
-
-fn serialize_manifest_yaml(manifest: &LimaManifest) -> Result<String, color_eyre::Report> {
-    serde_yaml::to_string(manifest)
-        .map_err(|e| color_eyre::eyre::eyre!("failed to serialize manifest yaml: {}", e))
-}
 
 fn sanitize_project_name(name: &str) -> Option<String> {
     let sanitized: String = name
@@ -132,6 +42,60 @@ fn project_name_suffix(seed: &str) -> String {
     format!("{:08x}", (hash & 0xffff_ffff) as u32)
 }
 
+fn run_container_session(
+    container_id: &str,
+    guest_workdir: &str,
+    target_args: &[&str],
+    requires_tty: bool,
+) -> Result<(), color_eyre::Report> {
+    let use_tty = std::io::stdin().is_terminal()
+        && std::io::stdout().is_terminal()
+        && std::io::stderr().is_terminal();
+
+    if requires_tty && !use_tty {
+        return Err(color_eyre::eyre::eyre!(
+            "interactive TTY is required for this profile; run from a local terminal"
+        ));
+    }
+
+    let run_once = |tty: bool| -> Result<std::process::ExitStatus, color_eyre::Report> {
+        let mut args = vec!["exec"];
+        if tty {
+            args.push("--interactive");
+            args.push("--tty");
+        }
+        args.push("--workdir");
+        args.push(guest_workdir);
+        args.push(container_id);
+        args.extend_from_slice(target_args);
+
+        let status = std::process::Command::new("container")
+            .args(&args)
+            .stdin(Stdio::inherit())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .status()?;
+        Ok(status)
+    };
+
+    let status = run_once(use_tty)?;
+    if status.success() {
+        return Ok(());
+    }
+
+    if use_tty && !requires_tty {
+        eprintln!("warning: interactive TTY launch failed; retrying without TTY");
+        let retry_status = run_once(false)?;
+        if retry_status.success() {
+            return Ok(());
+        }
+    }
+
+    Err(color_eyre::eyre::eyre!(
+        "application session exited with error"
+    ))
+}
+
 fn validate_workspace_root(workspace: &Path, home: &Path) -> Result<(), color_eyre::Report> {
     if workspace == Path::new("/") {
         return Err(color_eyre::eyre::eyre!("workspace root cannot be '/'"));
@@ -140,7 +104,9 @@ fn validate_workspace_root(workspace: &Path, home: &Path) -> Result<(), color_ey
         return Err(color_eyre::eyre::eyre!("workspace root cannot be '/Users'"));
     }
     if workspace == home {
-        return Err(color_eyre::eyre::eyre!("workspace root cannot be '$HOME'"));
+        return Err(color_eyre::eyre::eyre!(
+            "security violation: workspace root cannot be the home directory; use a dedicated subdirectory (for example, ~/src)"
+        ));
     }
     if !workspace.starts_with(home) {
         return Err(color_eyre::eyre::eyre!(
@@ -233,225 +199,526 @@ pub fn resolve_workspace_context() -> Result<(String, PathBuf, PathBuf), color_e
     Ok((project_folder, mount_point, current_dir))
 }
 
-pub async fn vm_exists(vm_name: &str) -> bool {
-    let output = Command::new("limactl")
-        .args(["ls", "-q"])
+async fn container_list_all_json() -> Option<Vec<serde_json::Value>> {
+    let output = Command::new("container")
+        .args(["list", "--all", "--format", "json"])
         .output()
         .await
-        .ok()
-        .filter(|o| o.status.success());
-
-    if let Some(out) = output {
-        let stdout = String::from_utf8_lossy(&out.stdout);
-        for line in stdout.lines() {
-            if line == vm_name {
-                return true;
-            }
-        }
+        .ok()?;
+    if !output.status.success() {
+        return None;
     }
-    false
+
+    serde_json::from_slice::<Vec<serde_json::Value>>(&output.stdout).ok()
+}
+
+fn container_id_from_item(item: &serde_json::Value) -> Option<String> {
+    item.get("id")
+        .and_then(|v| v.as_str())
+        .or_else(|| {
+            item.get("configuration")
+                .and_then(|v| v.get("id"))
+                .and_then(|v| v.as_str())
+        })
+        .map(std::borrow::ToOwned::to_owned)
+}
+
+fn container_status_from_item(item: &serde_json::Value) -> Option<String> {
+    item.get("status")
+        .and_then(|v| v.as_str())
+        .or_else(|| item.get("state").and_then(|v| v.as_str()))
+        .or_else(|| {
+            item.get("status")
+                .and_then(|v| v.get("state"))
+                .and_then(|v| v.as_str())
+        })
+        .map(std::borrow::ToOwned::to_owned)
+}
+
+async fn container_exists(container_id: &str) -> bool {
+    let Some(items) = container_list_all_json().await else {
+        return false;
+    };
+
+    items
+        .iter()
+        .filter_map(container_id_from_item)
+        .any(|id| id == container_id)
+}
+
+async fn container_is_running(container_id: &str) -> bool {
+    let Some(items) = container_list_all_json().await else {
+        return false;
+    };
+
+    items.iter().any(|item| {
+        container_id_from_item(item).is_some_and(|id| id == container_id)
+            && container_status_from_item(item)
+                .map(|s| s.eq_ignore_ascii_case("running"))
+                .unwrap_or(false)
+    })
+}
+
+pub async fn sandbox_exists(container_id: &str) -> bool {
+    container_exists(container_id).await
 }
 
 pub async fn cleanup_untracked_vms(verbose: bool) -> Result<(), color_eyre::Report> {
     let home = std::env::var("HOME")?;
     let cache_dir = PathBuf::from(home).join(".cache/muthr");
 
-    let output = Command::new("limactl")
-        .args(["ls", "-q"])
-        .output()
-        .await
-        .ok()
-        .filter(|o| o.status.success());
-
-    let vms: Vec<String> = match output {
-        Some(out) => String::from_utf8_lossy(&out.stdout)
-            .lines()
-            .filter(|name| name.starts_with("muthr-") && *name != "muthr-services")
-            .map(std::borrow::ToOwned::to_owned)
-            .collect(),
-        None => Vec::new(),
+    let Some(items) = container_list_all_json().await else {
+        if verbose {
+            eprintln!("warning: failed to list containers for cleanup");
+        }
+        return Ok(());
     };
 
-    let now = std::time::SystemTime::now();
-
-    for vm_name in vms {
-        let marker = cache_dir.join(format!("{}-profiles", vm_name));
-        if marker.exists() {
+    for item in items {
+        let Some(container_id) = container_id_from_item(&item) else {
             continue;
-        }
-
-        let vm_store_dir = cache_dir
-            .parent()
-            .and_then(std::path::Path::parent)
-            .map(|p| p.join(".lima").join(&vm_name));
-        if let Some(store_dir) = vm_store_dir
-            && let Ok(meta) = std::fs::metadata(&store_dir)
-            && let Ok(modified) = meta.modified()
-            && now.duration_since(modified).unwrap_or_default().as_secs() < 300
+        };
+        if !container_id.starts_with("muthr-")
+            || container_id == "muthr-services"
+            || container_id == "muthr-searxng"
         {
-            if verbose {
-                eprintln!("info: skipping young sandbox vm {}", vm_name);
-            }
             continue;
         }
 
-        if vm_is_running(&vm_name).await {
+        let profile_cache = cache_dir.join(format!("{}-profiles", container_id));
+        if profile_cache.exists() {
+            continue;
+        }
+
+        let running = container_status_from_item(&item)
+            .map(|s| s.eq_ignore_ascii_case("running"))
+            .unwrap_or(false);
+        if running {
             if verbose {
-                eprintln!("info: skipping running untracked sandbox vm {}", vm_name);
+                eprintln!(
+                    "info: skipping running untracked sandbox container {}",
+                    container_id
+                );
             }
             continue;
         }
 
         if verbose {
-            eprintln!("warning: removing untracked sandbox vm {}", vm_name);
+            eprintln!(
+                "warning: removing untracked sandbox container {}",
+                container_id
+            );
         }
-        delete_vm(&vm_name, true).await?;
+        delete_container(&container_id, true).await?;
     }
 
     Ok(())
 }
 
-pub async fn vm_is_running(vm_name: &str) -> bool {
-    let output = Command::new("limactl")
-        .args(["ls", "-f", "{{.Status}}", vm_name])
-        .output()
-        .await
-        .ok();
-
-    if let Some(ref out) = output
-        && out.status.success()
-    {
-        let status = String::from_utf8_lossy(&out.stdout);
-        return status.contains("Running");
-    }
-    false
+pub async fn sandbox_is_running(container_id: &str) -> bool {
+    container_is_running(container_id).await
 }
 
-pub async fn stop_vm_with_timeout(
-    vm_name: &str,
+pub async fn stop_container_with_timeout(
+    container_id: &str,
     timeout_secs: u64,
 ) -> Result<bool, color_eyre::Report> {
-    if !vm_is_running(vm_name).await {
+    if !container_is_running(container_id).await {
         return Ok(false);
     }
 
-    let status = Command::new("limactl")
-        .args(["stop", vm_name])
-        .status()
-        .await;
-
-    if !matches!(status, Ok(s) if s.success()) {
-        eprintln!("warning: failed to stop vm {}, forcing stop", vm_name);
-        let force_status = Command::new("limactl")
-            .args(["stop", "--force", vm_name])
-            .status()
-            .await?;
-        if !force_status.success() {
-            return Err(color_eyre::eyre::eyre!(
-                "failed to force stop vm '{}'",
-                vm_name
-            ));
-        }
-    }
-
-    let start = std::time::Instant::now();
-    while start.elapsed().as_secs() < timeout_secs {
-        if !vm_is_running(vm_name).await {
-            return Ok(true);
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    }
-
-    eprintln!(
-        "warning: {} timed out after {}s, forcing stop",
-        vm_name, timeout_secs
-    );
-    let force_status = Command::new("limactl")
-        .args(["stop", "--force", vm_name])
+    let status = Command::new("container")
+        .args(["stop", "--time", &timeout_secs.to_string(), container_id])
         .status()
         .await?;
-    if !force_status.success() {
+    if !status.success() {
         return Err(color_eyre::eyre::eyre!(
-            "failed to force stop vm '{}'",
-            vm_name
+            "failed to stop container '{}'",
+            container_id
         ));
-    }
-
-    if vm_is_running(vm_name).await {
-        return Err(color_eyre::eyre::eyre!("vm '{}' is still running", vm_name));
     }
 
     Ok(true)
 }
 
-pub async fn vm_stop(vm_name: &str) -> Result<(), color_eyre::Report> {
-    let _ = stop_vm_with_timeout(vm_name, 30).await?;
+pub async fn stop_container_by_name(container_id: &str) -> Result<(), color_eyre::Report> {
+    let _ = stop_container_with_timeout(container_id, 30).await?;
     Ok(())
 }
 
 pub async fn protect_vm(vm_name: &str) -> Result<(), color_eyre::Report> {
-    let status = Command::new("limactl")
-        .args(["protect", vm_name])
-        .output()
-        .await?;
-
-    if !status.status.success() {
-        eprintln!("warning: failed to protect vm");
-    }
+    let _ = vm_name;
     Ok(())
 }
 
 pub async fn unprotect_vm(vm_name: &str) -> Result<(), color_eyre::Report> {
-    let status = Command::new("limactl")
-        .args(["unprotect", vm_name])
-        .output()
-        .await?;
-
-    if !status.status.success() {
-        eprintln!("warning: failed to unprotect vm");
-    }
+    let _ = vm_name;
     Ok(())
 }
 
-pub async fn delete_vm(vm_name: &str, force: bool) -> Result<(), color_eyre::Report> {
-    if !force && !std::io::stdout().is_terminal() {
-        eprintln!("error: terminal required for deletion, use --force to skip");
-        std::process::exit(77);
+pub async fn delete_sandbox(container_id: &str, force: bool) -> Result<(), color_eyre::Report> {
+    delete_container(container_id, force).await
+}
+
+pub async fn run_provision_script(
+    container_id: &str,
+    script_name: &str,
+    model_name: &str,
+    ctx_window: u32,
+    mount_point: &std::path::Path,
+    port: u16,
+) -> Result<(), color_eyre::Report> {
+    run_provision_container(
+        container_id,
+        script_name,
+        model_name,
+        ctx_window,
+        mount_point,
+        port,
+    )
+    .await
+}
+
+async fn compute_specs_revision_hash(
+    script_path: &Path,
+    lib_dir: &Path,
+) -> Result<String, color_eyre::Report> {
+    let mut files = vec![script_path.to_path_buf()];
+    files.extend(collect_regular_files_recursive(lib_dir)?);
+    files.sort();
+
+    let mut shasum_cmd = Command::new("shasum");
+    shasum_cmd.args(["-a", "256"]);
+    for file in &files {
+        shasum_cmd.arg(file);
     }
 
-    eprintln!("info: deleting vm {}", vm_name);
-
-    unprotect_vm(vm_name).await?;
-
-    if vm_is_running(vm_name).await {
-        vm_stop(vm_name).await?;
+    let output = shasum_cmd.output().await?;
+    if !output.status.success() {
+        return Err(color_eyre::eyre::eyre!(
+            "failed to compute provision hash for script and library"
+        ));
     }
 
-    let status = Command::new("limactl")
-        .args(["delete", vm_name])
+    let mut second_pass = Command::new("shasum")
+        .args(["-a", "256"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()?;
+    if let Some(mut stdin) = second_pass.stdin.take() {
+        stdin.write_all(&output.stdout).await?;
+        stdin.shutdown().await?;
+    }
+    let second_output = second_pass.wait_with_output().await?;
+    if !second_output.status.success() {
+        return Err(color_eyre::eyre::eyre!(
+            "failed to finalize provision hash digest"
+        ));
+    }
+
+    let stdout = String::from_utf8_lossy(&second_output.stdout);
+    let hash = stdout
+        .split_whitespace()
+        .next()
+        .ok_or_else(|| color_eyre::eyre::eyre!("invalid shasum output"))?;
+    Ok(hash.to_string())
+}
+
+fn collect_regular_files_recursive(root: &Path) -> Result<Vec<PathBuf>, color_eyre::Report> {
+    let mut files = Vec::new();
+    let mut dirs = vec![root.to_path_buf()];
+
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(&dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else if path.is_file() {
+                files.push(path);
+            }
+        }
+    }
+
+    Ok(files)
+}
+
+async fn resolve_active_model_and_ctx(home: &str, server_port: u16) -> (String, u32) {
+    let resolve_preset_model_and_ctx = || async {
+        let preset_name_path = PathBuf::from(home).join(".cache/muthr/active-preset-name-mlxcel");
+        let preset_name = fs::read_to_string(&preset_name_path)
+            .await
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+
+        let parsed = preset_name
+            .as_deref()
+            .and_then(crate::preset::resolve_preset)
+            .and_then(|path| crate::preset::parse_preset(&path).ok())
+            .and_then(|preset| {
+                preset.slots.first().map(|slot| {
+                    let ctx_hint = slot.max_output_tokens.unwrap_or(131072);
+                    (slot.name.clone(), ctx_hint)
+                })
+            });
+
+        parsed.unwrap_or_else(|| ("local-model".to_string(), 131072))
+    };
+
+    let (default_model, preset_ctx_hint) = resolve_preset_model_and_ctx().await;
+
+    let parsed_model =
+        match crate::model::poll_loaded_model("127.0.0.1", server_port, 20, 1.0).await {
+            Ok(model) => model,
+            Err(err) => {
+                eprintln!(
+                    "warning: failed to poll loaded model from mlxcel-server, using fallback: {}",
+                    err
+                );
+                default_model.clone()
+            }
+        };
+    let sanitized_model = if parsed_model.contains('/') || parsed_model.contains('\\') {
+        std::path::Path::new(&parsed_model)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or(&parsed_model)
+            .to_string()
+    } else {
+        parsed_model.clone()
+    };
+    let active_model = if sanitized_model.trim().is_empty() {
+        default_model
+    } else {
+        sanitized_model
+    };
+    let model_ctx_window = crate::model::get_ctx_window("127.0.0.1", server_port)
+        .await
+        .unwrap_or(preset_ctx_hint);
+    let ctx_window = std::cmp::max(model_ctx_window, preset_ctx_hint);
+
+    (active_model, ctx_window)
+}
+
+async fn discover_container_gateway() -> Option<String> {
+    let output = Command::new("container")
+        .args(["network", "list", "--format", "json"])
         .output()
+        .await
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let entries = serde_json::from_slice::<Vec<serde_json::Value>>(&output.stdout).ok()?;
+    for entry in entries {
+        let candidates = [
+            entry.get("gateway"),
+            entry.get("Gateway"),
+            entry.get("status").and_then(|v| v.get("ipv4Gateway")),
+            entry.get("status").and_then(|v| v.get("ipv6Gateway")),
+            entry.get("status").and_then(|v| v.get("gateway")),
+            entry.get("Status").and_then(|v| v.get("IPv4Gateway")),
+            entry.get("Status").and_then(|v| v.get("IPv6Gateway")),
+            entry.get("Status").and_then(|v| v.get("Gateway")),
+            entry.get("ipam").and_then(|v| v.get("gateway")),
+            entry.get("IPAM").and_then(|v| v.get("Gateway")),
+            entry
+                .get("subnets")
+                .and_then(|v| v.as_array())
+                .and_then(|arr| arr.first())
+                .and_then(|v| v.get("gateway")),
+            entry
+                .get("Subnets")
+                .and_then(|v| v.as_array())
+                .and_then(|arr| arr.first())
+                .and_then(|v| v.get("Gateway")),
+        ];
+
+        for candidate in candidates.into_iter().flatten() {
+            if let Some(ip) = candidate.as_str()
+                && !ip.trim().is_empty()
+            {
+                return Some(ip.trim().to_string());
+            }
+        }
+    }
+
+    None
+}
+
+async fn resolve_container_host_gateway() -> Result<String, color_eyre::Report> {
+    let cfg = crate::config::load()?;
+    let host = if let Some(configured) = cfg.container_host_gateway {
+        configured.trim().to_string()
+    } else if let Ok(env_host) = std::env::var("MUTHR_CONTAINER_HOST_GATEWAY") {
+        env_host.trim().to_string()
+    } else {
+        discover_container_gateway()
+            .await
+            .ok_or_else(|| {
+                color_eyre::eyre::eyre!(
+                    "could not determine container host gateway; set MUTHR_CONTAINER_HOST_GATEWAY or container_host_gateway in config"
+                )
+            })?
+    };
+
+    if host.is_empty() {
+        return Err(color_eyre::eyre::eyre!(
+            "container host gateway resolved to an empty value"
+        ));
+    }
+
+    Ok(host)
+}
+
+async fn backend_openai_url(port: u16) -> Result<String, color_eyre::Report> {
+    let host = resolve_container_host_gateway().await?;
+
+    Ok(format!("http://{}:{}/v1", host, port))
+}
+
+pub async fn start(profile_name: String) -> Result<(), color_eyre::Report> {
+    start_container(profile_name).await
+}
+
+pub async fn stop() -> Result<(), color_eyre::Report> {
+    stop_container().await
+}
+
+pub async fn ls(out_fmt: crate::OutputFormat) -> Result<(), color_eyre::Report> {
+    list_containers(out_fmt).await
+}
+
+async fn start_container(profile_name: String) -> Result<(), color_eyre::Report> {
+    let (container_id, project_root, workdir) = resolve_workspace_context()?;
+    eprintln!("info: target: {}", container_id);
+
+    let mount_src = project_root
+        .to_str()
+        .ok_or_else(|| color_eyre::eyre::eyre!("workspace path contains invalid UTF-8"))?;
+
+    let exists = container_exists(&container_id).await;
+    if !exists {
+        eprintln!("info: creating container {}", container_id);
+        let volume = format!("{}:/workspace", mount_src);
+        let status = Command::new("container")
+            .args([
+                "create",
+                "--name",
+                &container_id,
+                "--detach",
+                "--volume",
+                &volume,
+                "--workdir",
+                "/workspace",
+                "debian:13-slim",
+                "sh",
+                "-lc",
+                "while true; do sleep 3600; done",
+            ])
+            .status()
+            .await?;
+        if !status.success() {
+            return Err(color_eyre::eyre::eyre!(
+                "failed to create container '{}' (run 'container system start' if the service is not running)",
+                container_id
+            ));
+        }
+    }
+
+    if !container_is_running(&container_id).await {
+        let status = Command::new("container")
+            .args(["start", &container_id])
+            .status()
+            .await?;
+        if !status.success() {
+            return Err(color_eyre::eyre::eyre!(
+                "failed to start container '{}'",
+                container_id
+            ));
+        }
+    }
+
+    ensure_container_runtime_baseline(&container_id).await?;
+
+    let guest_workdir = match workdir.strip_prefix(&project_root) {
+        Ok(relative_workdir) => PathBuf::from("/workspace").join(relative_workdir),
+        Err(_) => PathBuf::from("/workspace"),
+    };
+    let guest_workdir_str = guest_workdir
+        .to_str()
+        .ok_or_else(|| color_eyre::eyre::eyre!("guest workdir contains invalid UTF-8"))?;
+
+    let home = std::env::var("HOME")?;
+    let cfg = crate::config::load()?;
+    let server_port = cfg.server_port.unwrap_or(8080);
+    let (active_model, ctx_window) = resolve_active_model_and_ctx(&home, server_port).await;
+
+    if profile_name != "base" {
+        let cache_dir = PathBuf::from(&home)
+            .join(".cache/muthr")
+            .join(format!("{}-profiles", container_id));
+
+        eprintln!("info: applying profile: {}", profile_name);
+        run_provision_container(
+            &container_id,
+            &profile_name,
+            &active_model,
+            ctx_window,
+            Path::new("/workspace"),
+            server_port,
+        )
         .await?;
 
-    if !status.status.success() {
-        return Err(color_eyre::eyre::eyre!("failed to delete vm '{}'", vm_name));
+        let existing_profiles = fs::read_to_string(&cache_dir).await.unwrap_or_default();
+        if !existing_profiles.lines().any(|l| l.trim() == profile_name) {
+            let mut existing = existing_profiles;
+            if !existing.is_empty() && !existing.ends_with('\n') {
+                existing.push('\n');
+            }
+            existing.push_str(&profile_name);
+            existing.push('\n');
+            let Some(cache_parent) = cache_dir.parent() else {
+                return Err(color_eyre::eyre::eyre!("invalid profile cache path"));
+            };
+            fs::create_dir_all(cache_parent).await?;
+            fs::write(&cache_dir, existing).await?;
+        }
+
+        eprintln!("info: launching workspace context");
+        let target_args = match profile_name.as_str() {
+            "opencode" => vec!["opencode"],
+            _ => vec![],
+        };
+
+        let requires_tty = profile_name == "opencode";
+        run_container_session(&container_id, guest_workdir_str, &target_args, requires_tty)?;
+
+        return Ok(());
     }
 
-    let cache_dir = std::env::var("HOME")
-        .ok()
-        .map(|h| PathBuf::from(h).join(".cache/muthr"))
-        .unwrap_or_else(|| PathBuf::from("/tmp/muthr-cache"));
-
-    let profile_cache = cache_dir.join(format!("{}-profiles", vm_name));
-    if profile_cache.exists() {
-        fs::remove_file(&profile_cache).await.ok();
+    let cache_dir = PathBuf::from(&home)
+        .join(".cache/muthr")
+        .join(format!("{}-profiles", container_id));
+    if !cache_dir.exists() {
+        let Some(cache_parent) = cache_dir.parent() else {
+            return Err(color_eyre::eyre::eyre!("invalid profile cache path"));
+        };
+        fs::create_dir_all(cache_parent).await?;
+        fs::write(&cache_dir, "base\n").await?;
     }
 
-    eprintln!("info: deleted {}", vm_name);
+    eprintln!("info: container ready, launching shell");
+    run_container_session(&container_id, guest_workdir_str, &["sh"], false)
+        .map_err(|_| color_eyre::eyre::eyre!("shell session exited with error"))?;
+
     Ok(())
 }
 
-pub async fn run_provision(
-    vm_name: &str,
+async fn run_provision_container(
+    container_id: &str,
     script_name: &str,
     model_name: &str,
     ctx_window: u32,
@@ -459,8 +726,10 @@ pub async fn run_provision(
     port: u16,
 ) -> Result<(), color_eyre::Report> {
     let home = std::env::var("HOME")?;
-    let host_script =
-        PathBuf::from(&home).join(format!(".config/muthr/provision.d/{}.sh", script_name));
+    let host_script = PathBuf::from(&home).join(format!(
+        ".config/muthr/sandbox.d/container/provision.d/{}.sh",
+        script_name
+    ));
 
     if !host_script.exists() {
         return Err(color_eyre::eyre::eyre!(
@@ -499,8 +768,12 @@ pub async fn run_provision(
     }
 
     eprintln!("info: provisioning: {}", script_name);
-    let openai_url = format!("http://host.lima.internal:{}/v1", port);
+    let host_gateway = resolve_container_host_gateway().await?;
+    let openai_url = backend_openai_url(port).await?;
+    let searxng_url = format!("http://{}:18766", host_gateway);
     validate_env_value(&openai_url, "MUTHR_OPENAI_URL")?;
+    validate_env_value(&host_gateway, "MUTHR_CONTAINER_HOST_GATEWAY")?;
+    validate_env_value(&searxng_url, "MUTHR_SEARXNG_URL")?;
     validate_env_value(model_name, "MUTHR_MODEL_NAME")?;
     validate_model_name(model_name)?;
     validate_env_value(mount_str, "MUTHR_WORKSPACE_MOUNT")?;
@@ -516,17 +789,17 @@ pub async fn run_provision(
         ));
     }
 
+    let specs_rev = compute_specs_revision_hash(&host_script, &host_lib_dir).await?;
     let guest_provision_dir = format!("/tmp/muthr-provision-{}", script_name);
+    let guest_script_path = format!("{}/{}.sh", guest_provision_dir, script_name);
 
-    let mkdir_status = Command::new("limactl")
+    let mkdir_status = Command::new("container")
         .args([
-            "shell",
-            "--workdir",
-            "/tmp",
-            vm_name,
-            "mkdir",
-            "-p",
-            &guest_provision_dir,
+            "exec",
+            container_id,
+            "sh",
+            "-lc",
+            &format!("mkdir -p '{}'", guest_provision_dir),
         ])
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
@@ -538,16 +811,13 @@ pub async fn run_provision(
         ));
     }
 
-    let guest_script_path = format!("{}/{}.sh", guest_provision_dir, script_name);
-    let guest_lib_dir = format!("{}/lib", guest_provision_dir);
-
-    let copy_script_status = Command::new("limactl")
+    let copy_script_status = Command::new("container")
         .args([
-            "cp",
+            "copy",
             host_script.to_str().ok_or_else(|| {
                 color_eyre::eyre::eyre!("provision script path contains invalid UTF-8")
             })?,
-            &format!("{}:{}", vm_name, guest_provision_dir),
+            &format!("{}:{}", container_id, guest_script_path),
         ])
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
@@ -555,18 +825,17 @@ pub async fn run_provision(
         .await?;
     if !copy_script_status.success() {
         return Err(color_eyre::eyre::eyre!(
-            "failed to copy provision script into VM"
+            "failed to copy provision script into container"
         ));
     }
 
-    let copy_lib_status = Command::new("limactl")
+    let copy_lib_status = Command::new("container")
         .args([
-            "cp",
-            "-r",
+            "copy",
             host_lib_dir.to_str().ok_or_else(|| {
                 color_eyre::eyre::eyre!("provision lib path contains invalid UTF-8")
             })?,
-            &format!("{}:{}", vm_name, guest_lib_dir),
+            &format!("{}:{}", container_id, guest_provision_dir),
         ])
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
@@ -574,23 +843,29 @@ pub async fn run_provision(
         .await?;
     if !copy_lib_status.success() {
         return Err(color_eyre::eyre::eyre!(
-            "failed to copy provision library into VM"
+            "failed to copy provision library into container"
         ));
     }
 
-    let mut child = Command::new("limactl")
-        .args([
-            "shell",
-            "--workdir",
-            "/tmp",
-            vm_name,
-            "bash",
-            &guest_script_path,
-        ])
-        .env("MUTHR_OPENAI_URL", openai_url)
-        .env("MUTHR_MODEL_NAME", model_name)
-        .env("MUTHR_CTX_WINDOW", ctx_window.to_string())
-        .env("MUTHR_WORKSPACE_MOUNT", mount_str)
+    let mut child = Command::new("container")
+        .args(["exec", "--workdir", "/tmp"])
+        .arg("--env")
+        .arg(format!("MUTHR_OPENAI_URL={}", openai_url))
+        .arg("--env")
+        .arg(format!("MUTHR_MODEL_NAME={}", model_name))
+        .arg("--env")
+        .arg(format!("MUTHR_CTX_WINDOW={}", ctx_window))
+        .arg("--env")
+        .arg(format!("MUTHR_WORKSPACE_MOUNT={}", mount_str))
+        .arg("--env")
+        .arg(format!("MUTHR_SPECS_REV={}", specs_rev))
+        .arg("--env")
+        .arg(format!("MUTHR_CONTAINER_HOST_GATEWAY={}", host_gateway))
+        .arg("--env")
+        .arg(format!("MUTHR_SEARXNG_URL={}", searxng_url))
+        .arg(container_id)
+        .arg("bash")
+        .arg(&guest_script_path)
         .stdin(Stdio::piped())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
@@ -611,317 +886,152 @@ pub async fn run_provision(
     Ok(())
 }
 
-async fn wait_for_vm_ready(vm_name: &str) -> Result<(), color_eyre::Report> {
-    let mut retries = 0;
-    let max_retries = 60;
-
-    loop {
-        if vm_is_running(vm_name).await {
-            return Ok(());
-        }
-        retries += 1;
-        if retries >= max_retries {
-            return Err(color_eyre::eyre::eyre!(
-                "timed out waiting for VM '{}' to become ready",
-                vm_name
-            ));
-        }
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-    }
-}
-
-pub async fn start(profile_name: String) -> Result<(), color_eyre::Report> {
-    let (vm_name, project_root, workdir) = resolve_workspace_context()?;
-    eprintln!("info: target: {}", vm_name);
-
-    let home = std::env::var("HOME")?;
-    let config_dir = PathBuf::from(&home).join(".config/muthr");
-    let manifest_path = crate::catalog::resolve_manifest(&config_dir, &profile_name);
-
-    if !manifest_path.exists() {
-        eprintln!("error: manifest not found at {:?}", manifest_path);
-        eprintln!("info: run 'muthr init'");
-        std::process::exit(66);
-    }
-
-    let manifest_file = fs::File::open(&manifest_path).await?;
-    let mut content = String::new();
-    manifest_file
-        .take((MAX_MANIFEST_BYTES + 1) as u64)
-        .read_to_string(&mut content)
+async fn ensure_container_runtime_baseline(container_id: &str) -> Result<(), color_eyre::Report> {
+    let marker = "/var/lib/muthr/container-baseline-ready";
+    let has_marker = Command::new("container")
+        .args([
+            "exec",
+            container_id,
+            "sh",
+            "-lc",
+            &format!("test -f {}", marker),
+        ])
+        .status()
         .await?;
-    if content.len() > MAX_MANIFEST_BYTES {
+    if has_marker.success() {
+        return Ok(());
+    }
+
+    let install_status = Command::new("container")
+        .args([
+            "exec",
+            container_id,
+            "sh",
+            "-lc",
+            "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq bash curl ca-certificates sudo git",
+        ])
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .await?;
+    if !install_status.success() {
         return Err(color_eyre::eyre::eyre!(
-            "manifest exceeds max size: {} bytes",
-            MAX_MANIFEST_BYTES
+            "failed to install container baseline dependencies"
         ));
     }
-    let host_workspace_mount = project_root
-        .to_str()
-        .ok_or_else(|| color_eyre::eyre::eyre!("workspace path contains invalid UTF-8"))?;
-    let guest_workspace_mount = "/workspace";
-    let mut manifest_doc = parse_manifest_yaml(&content).map_err(|e| {
-        color_eyre::eyre::eyre!(
-            "failed to parse manifest '{}': {}",
-            manifest_path.display(),
-            e
-        )
-    })?;
-    update_mount_placeholders(
-        &mut manifest_doc,
-        host_workspace_mount,
-        guest_workspace_mount,
-    );
-    let expanded = serialize_manifest_yaml(&manifest_doc)?;
 
-    if !vm_exists(&vm_name).await {
-        eprintln!("info: creating vm {}", vm_name);
-        let mut tmp_yaml = NamedTempFile::new()?;
-        tmp_yaml.write_all(expanded.as_bytes())?;
-
-        let mut create_cmd = Command::new("limactl");
-        create_cmd
-            .args(["create", "--name", &vm_name])
-            .arg(tmp_yaml.path())
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
-            .kill_on_drop(true);
-        let create_status = create_cmd.status().await?;
-
-        if !create_status.success() {
-            return Err(color_eyre::eyre::eyre!("failed to create vm: {}", vm_name));
-        }
-
-        let mut start_cmd = Command::new("limactl");
-        start_cmd
-            .args(["start", &vm_name])
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
-            .kill_on_drop(true);
-        let start_status = start_cmd.status().await?;
-
-        if !start_status.success() {
-            return Err(color_eyre::eyre::eyre!("failed to start vm: {}", vm_name));
-        }
-
-        wait_for_vm_ready(&vm_name).await?;
-
-        protect_vm(&vm_name).await?;
-    } else if !vm_is_running(&vm_name).await {
-        eprintln!("info: starting vm {}", vm_name);
-        let mut start_cmd = Command::new("limactl");
-        start_cmd
-            .args(["start", &vm_name])
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
-            .kill_on_drop(true);
-        let status = start_cmd.status().await?;
-
-        if !status.success() {
-            return Err(color_eyre::eyre::eyre!("failed to start VM: {}", vm_name));
-        }
-
-        wait_for_vm_ready(&vm_name).await?;
-    } else {
-        eprintln!("info: vm already running");
+    let marker_status = Command::new("container")
+        .args([
+            "exec",
+            container_id,
+            "sh",
+            "-lc",
+            "mkdir -p /var/lib/muthr && touch /var/lib/muthr/container-baseline-ready",
+        ])
+        .status()
+        .await?;
+    if !marker_status.success() {
+        eprintln!("warning: failed to persist container baseline marker");
     }
 
-    let guest_workdir = match workdir.strip_prefix(&project_root) {
-        Ok(relative_workdir) => PathBuf::from(guest_workspace_mount).join(relative_workdir),
-        Err(_) => PathBuf::from(guest_workspace_mount),
-    };
-    let guest_workdir_str = guest_workdir
-        .to_str()
-        .ok_or_else(|| color_eyre::eyre::eyre!("guest workdir contains invalid UTF-8"))?;
+    Ok(())
+}
 
-    let cfg = crate::config::load()?;
-    let server_port = cfg.server_port.unwrap_or(8080);
-    let resolve_default_model = || async {
-        let preset_name_path = PathBuf::from(&home).join(".cache/muthr/active-preset-name");
-        let preset_name = fs::read_to_string(&preset_name_path)
-            .await
-            .ok()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty());
+async fn stop_container() -> Result<(), color_eyre::Report> {
+    let (container_id, _, _) = resolve_workspace_context()?;
+    if !container_exists(&container_id).await {
+        return Ok(());
+    }
 
-        let slot_name = preset_name
-            .as_deref()
-            .and_then(crate::preset::resolve_preset)
-            .and_then(|path| crate::preset::parse_preset(&path).ok())
-            .and_then(|preset| preset.slots.first().map(|slot| slot.name.clone()))
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty());
+    if !container_is_running(&container_id).await {
+        eprintln!("info: already stopped {}", container_id);
+        return Ok(());
+    }
 
-        slot_name.unwrap_or_else(|| "local-model".to_string())
-    };
-
-    let parsed_model =
-        match crate::model::poll_loaded_model("127.0.0.1", server_port, 20, 1.0).await {
-            Ok(model) => model,
-            Err(err) => {
-                eprintln!(
-                    "warning: failed to poll loaded model from llama-server, using fallback: {}",
-                    err
-                );
-                resolve_default_model().await
-            }
-        };
-    let sanitized_model = std::path::Path::new(&parsed_model)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or(&parsed_model)
-        .trim_end_matches(".gguf")
-        .to_string();
-    let active_model = if sanitized_model.trim().is_empty() {
-        resolve_default_model().await
-    } else {
-        sanitized_model
-    };
-    let ctx_window = crate::model::get_ctx_window("127.0.0.1", server_port)
-        .await
-        .unwrap_or(16000);
-
-    if profile_name != "base" {
-        let cache_dir = PathBuf::from(&home)
-            .join(".cache/muthr")
-            .join(format!("{}-profiles", vm_name));
-
-        eprintln!("info: applying profile: {}", profile_name);
-        run_provision(
-            &vm_name,
-            &profile_name,
-            &active_model,
-            ctx_window,
-            Path::new(guest_workspace_mount),
-            server_port,
-        )
+    let status = Command::new("container")
+        .args(["stop", &container_id])
+        .status()
         .await?;
+    if !status.success() {
+        return Err(color_eyre::eyre::eyre!(
+            "failed to stop container '{}'",
+            container_id
+        ));
+    }
 
-        let existing_profiles = fs::read_to_string(&cache_dir).await.unwrap_or_default();
-        if !existing_profiles.lines().any(|l| l.trim() == profile_name) {
-            let mut existing = existing_profiles;
-            if !existing.is_empty() && !existing.ends_with('\n') {
-                existing.push('\n');
-            }
-            existing.push_str(&profile_name);
-            existing.push('\n');
-            let Some(cache_parent) = cache_dir.parent() else {
-                return Err(color_eyre::eyre::eyre!("invalid profile cache path"));
-            };
-            fs::create_dir_all(cache_parent).await?;
-            fs::write(&cache_dir, existing).await?;
-        }
+    eprintln!("info: stopped {}", container_id);
+    Ok(())
+}
 
-        eprintln!("info: launching workspace context");
-        let target_args = match profile_name.as_str() {
-            "opencode" => vec!["opencode"],
-            "hermes-agent" => vec!["bash", "-l"],
-            _ => vec![],
-        };
+async fn delete_container(container_id: &str, force: bool) -> Result<(), color_eyre::Report> {
+    if !force && !std::io::stdout().is_terminal() {
+        eprintln!("error: terminal required for deletion, use --force to skip");
+        std::process::exit(77);
+    }
 
-        let mut args = vec!["--tty", "shell", "--workdir", guest_workdir_str, &vm_name];
-        args.extend(target_args);
+    if !container_exists(container_id).await {
+        return Ok(());
+    }
 
-        let status = std::process::Command::new("limactl")
-            .args(&args)
-            .stdin(Stdio::inherit())
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
-            .status()?;
-
-        if !status.success() {
+    if container_is_running(container_id).await && !force {
+        let stop_status = Command::new("container")
+            .args(["stop", container_id])
+            .status()
+            .await?;
+        if !stop_status.success() {
             return Err(color_eyre::eyre::eyre!(
-                "application session exited with error"
+                "failed to stop container '{}' before deletion",
+                container_id
             ));
         }
-    } else {
-        let cache_dir = PathBuf::from(&home)
-            .join(".cache/muthr")
-            .join(format!("{}-profiles", vm_name));
-
-        if !cache_dir.exists() {
-            let Some(cache_parent) = cache_dir.parent() else {
-                return Err(color_eyre::eyre::eyre!("invalid profile cache path"));
-            };
-            fs::create_dir_all(cache_parent).await?;
-            fs::write(&cache_dir, "base\n").await?;
-        }
-
-        eprintln!("info: sandbox ready, launching shell");
-        let status = std::process::Command::new("limactl")
-            .args(["--tty", "shell", "--workdir", guest_workdir_str, &vm_name])
-            .stdin(Stdio::inherit())
-            .status()?;
-
-        if !status.success() {
-            return Err(color_eyre::eyre::eyre!("shell session exited with error"));
-        }
     }
 
+    let mut args: Vec<&str> = vec!["delete"];
+    if force {
+        args.push("--force");
+    }
+    args.push(container_id);
+
+    let status = Command::new("container").args(args).status().await?;
+    if !status.success() {
+        return Err(color_eyre::eyre::eyre!(
+            "failed to delete container '{}'",
+            container_id
+        ));
+    }
+
+    eprintln!("info: deleted {}", container_id);
     Ok(())
 }
 
-pub async fn stop() -> Result<(), color_eyre::Report> {
-    let (vm_name, _, _) = resolve_workspace_context()?;
-    if !vm_exists(&vm_name).await {
-        return Ok(());
-    }
-    let was_running = stop_vm_with_timeout(&vm_name, 30).await?;
-    if !was_running {
-        eprintln!("info: already stopped {}", vm_name);
-        return Ok(());
-    }
-    eprintln!("info: stopped {}", vm_name);
-    Ok(())
-}
-
-pub async fn ls(out_fmt: crate::OutputFormat) -> Result<(), color_eyre::Report> {
-    let muthr_prefix = "muthr-";
-
-    let output = Command::new("limactl")
-        .args(["ls", "-q"])
-        .output()
-        .await
-        .ok();
-
-    let vms: Vec<String> = match output {
-        Some(out) if out.status.success() => String::from_utf8_lossy(&out.stdout)
-            .lines()
-            .filter(|v| v.starts_with(muthr_prefix) && *v != "muthr-services")
-            .map(|v| v.to_string())
-            .collect(),
-        _ => Vec::new(),
+async fn list_containers(out_fmt: crate::OutputFormat) -> Result<(), color_eyre::Report> {
+    let Some(items) = container_list_all_json().await else {
+        return Err(color_eyre::eyre::eyre!(
+            "failed to list containers (run 'container system start' if the service is not running)"
+        ));
     };
 
-    if vms.is_empty() {
+    let mut entries: Vec<(String, String, String)> = items
+        .iter()
+        .filter_map(|item| {
+            let id = container_id_from_item(item)?;
+            if !id.starts_with("muthr-") || id == "muthr-services" || id == "muthr-searxng" {
+                return None;
+            }
+            let status = container_status_from_item(item).unwrap_or_else(|| "unknown".to_string());
+            Some((id.clone(), status, "/workspace".to_string()))
+        })
+        .collect();
+
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+    if entries.is_empty() {
         if out_fmt == crate::OutputFormat::Text {
-            eprintln!("no managed vms");
+            eprintln!("no managed sandbox containers");
         } else if out_fmt == crate::OutputFormat::Json {
             println!("[]");
         }
         return Ok(());
-    }
-
-    let mut entries: Vec<(String, String, String)> = Vec::new();
-    for vm in &vms {
-        let status = Command::new("limactl")
-            .args(["ls", "-f", "{{.Status}}", vm])
-            .output()
-            .await
-            .ok()
-            .and_then(|out| {
-                String::from_utf8_lossy(&out.stdout)
-                    .trim()
-                    .to_string()
-                    .split_whitespace()
-                    .next()
-                    .map(|s| s.to_string())
-            })
-            .unwrap_or_else(|| "unknown".to_string());
-
-        let project = vm.strip_prefix(muthr_prefix).unwrap_or(vm);
-        let mount_point = format!("/muthr-{}", project);
-        entries.push((vm.clone(), status, mount_point));
     }
 
     if out_fmt == crate::OutputFormat::Json {
@@ -943,19 +1053,8 @@ pub async fn ls(out_fmt: crate::OutputFormat) -> Result<(), color_eyre::Report> 
         return Ok(());
     }
 
-    let is_tty = std::io::stdout().is_terminal();
-    if !is_tty {
-        for (vm, status, mount_point) in &entries {
-            eprintln!("  {:<30} {}  mount: {}", vm, status, mount_point);
-        }
-    } else {
-        let mut rows: Vec<Vec<String>> = Vec::new();
-        for (vm, status, mount_point) in &entries {
-            rows.push(vec![vm.clone(), status.clone(), mount_point.clone()]);
-        }
-
-        let headers = vec!["vm", "status", "mount"];
-        crate::ui::select_table(&headers, &rows);
+    for (name, status, mount) in &entries {
+        eprintln!("  {:<30} {}  mount: {}", name, status, mount);
     }
 
     Ok(())
