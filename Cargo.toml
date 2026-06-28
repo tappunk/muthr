@@ -8,7 +8,7 @@ description = "Zero-trust orchestrator for local MLX inference and container-bas
 repository = "https://github.com/tappunk/muthr"
 license = "Apache-2.0"
 readme = "README.md"
-keywords = ["cli", "mlxcel", "mlx", "macos", "apple-container", "apple-silicon"]
+keywords = ["cli", "mlxcel", "macos", "apple-container", "apple-silicon"]
 categories = [
   "command-line-utilities",
   "virtualization",
