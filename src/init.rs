@@ -1,3 +1,17 @@
+// Copyright 2026 tappunk
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -6,7 +20,7 @@ pub struct InitCommands {
     pub force: bool,
 }
 
-const MANAGED_DIRS: &[&str] = &["clients", "manifests", "provider.d", "provision.d"];
+const MANAGED_DIRS: &[&str] = &["clients", "provider.d", "sandbox.d"];
 
 pub fn run(cmd: InitCommands) -> Result<(), color_eyre::Report> {
     let config_dir = get_config_dir()?;
@@ -36,18 +50,7 @@ pub fn run(cmd: InitCommands) -> Result<(), color_eyre::Report> {
             .as_nanos()
     ));
 
-    eprintln!("info: cloning muthr-specs into {}", tmp_dir.display());
-
-    let status = Command::new("git")
-        .args(["clone", "--depth", "1", &repo_url])
-        .arg(&tmp_dir)
-        .status()?;
-
-    if !status.success() {
-        let _ = std::fs::remove_dir_all(&tmp_dir);
-        eprintln!("error: failed to clone muthr-specs");
-        std::process::exit(1);
-    }
+    stage_specs_source(&repo_url, &tmp_dir)?;
 
     if let Some(parent) = config_dir.parent() {
         std::fs::create_dir_all(parent)?;
@@ -69,6 +72,56 @@ pub fn run(cmd: InitCommands) -> Result<(), color_eyre::Report> {
     }
 
     eprintln!("info: installed");
+
+    Ok(())
+}
+
+fn stage_specs_source(repo_url: &str, dst: &Path) -> Result<(), color_eyre::Report> {
+    let local_src = Path::new(repo_url);
+    if local_src.is_dir() {
+        eprintln!(
+            "info: staging muthr-specs from local directory {}",
+            local_src.display()
+        );
+        copy_dir_contents(local_src, dst)?;
+        return Ok(());
+    }
+
+    eprintln!("info: cloning muthr-specs into {}", dst.display());
+
+    let status = Command::new("git")
+        .args(["clone", "--depth", "1", repo_url])
+        .arg(dst)
+        .status()?;
+
+    if !status.success() {
+        let _ = std::fs::remove_dir_all(dst);
+        eprintln!("error: failed to clone muthr-specs");
+        std::process::exit(1);
+    }
+
+    Ok(())
+}
+
+fn copy_dir_contents(src: &Path, dst: &Path) -> Result<(), color_eyre::Report> {
+    std::fs::create_dir_all(dst)?;
+
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let src_path = entry.path();
+        let name = entry.file_name();
+        if name == ".git" {
+            continue;
+        }
+
+        let dst_path = dst.join(&name);
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            copy_dir_contents(&src_path, &dst_path)?;
+        } else if file_type.is_file() {
+            std::fs::copy(&src_path, &dst_path)?;
+        }
+    }
 
     Ok(())
 }
@@ -95,7 +148,7 @@ fn get_config_dir() -> Result<PathBuf, color_eyre::Report> {
     Ok(home.join(".config/muthr"))
 }
 
-fn remove_dir_all(path: &PathBuf) -> Result<(), color_eyre::Report> {
+fn remove_dir_all(path: &Path) -> Result<(), color_eyre::Report> {
     std::fs::remove_dir_all(path)?;
     Ok(())
 }
