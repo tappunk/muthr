@@ -1,6 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
+cd "$(dirname "$0")/.."
+
 BIN_NAME="muthr"
 TARGET_ARCH="macos-arm64"
 RUST_TARGET="aarch64-apple-darwin"
@@ -59,7 +61,7 @@ cargo fmt --check || {
   echo "[ERR] Code formatting violations found. Run 'cargo fmt'."
   exit 1
 }
-cargo clippy -- -D warnings || {
+cargo clippy --all-targets --all-features -- -D warnings || {
   echo "[ERR] Clippy warnings detected. Fix them before releasing."
   exit 1
 }
@@ -145,8 +147,6 @@ cp Cargo.lock "$BACKUP_CARGO_LOCK"
 cp flake.nix "$BACKUP_FLAKE_NIX"
 sed -i.bak "s/version = \"$CURRENT_VERSION\"/version = \"$NEW_VERSION\"/" Cargo.toml flake.nix
 rm Cargo.toml.bak flake.nix.bak
-
-cargo update -p "$BIN_NAME"
 
 echo "[PROC] Compiling optimized release binary for Apple Silicon..."
 cargo build --release --target "$RUST_TARGET"
