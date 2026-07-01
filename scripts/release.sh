@@ -69,6 +69,10 @@ cargo test || {
   echo "[ERR] Test suite execution failed."
   exit 1
 }
+./scripts/ga-smoke.sh || {
+  echo "[ERR] GA smoke matrix failed."
+  exit 1
+}
 
 CURRENT_VERSION=$(grep -m 1 '^version = ' Cargo.toml | sed 's/version = "\(.*\)"/\1/')
 if [[ -z "$CURRENT_VERSION" ]]; then
@@ -198,13 +202,13 @@ git clone --depth 1 "https://github.com/tappunk/homebrew-muthr.git" "$TAP_DIR"
 
 cat <<EOF >"${TAP_DIR}/Formula/muthr.rb"
 class Muthr < Formula
-  desc "Zero-trust orchestrator for secure inference and isolated AI agent execution"
+  desc "Zero-trust orchestrator for MLX inference, container-based sandboxes, and MCP services on Apple Silicon"
   homepage "https://github.com/tappunk/muthr"
   version "${NEW_VERSION}"
 
   depends_on arch: :arm64
   depends_on :macos
-  depends_on "mlxcel"
+  depends_on "lablup/tap/mlxcel"
 
   url "https://github.com/tappunk/muthr/releases/download/v#{version}/muthr-#{version}-bin-macos-arm64.tar.gz"
   sha256 "${RAW_SHA}"

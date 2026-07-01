@@ -1,5 +1,5 @@
 {
-  description = "Zero-trust orchestrator for MLX inference and container-based sandboxes on Apple Silicon.";
+  description = "Zero-trust orchestrator for MLX inference, container-based sandboxes, and MCP services on Apple Silicon.";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
@@ -23,7 +23,7 @@
         nativeBuildInputs = with pkgs; [ installShellFiles ];
 
         meta = with pkgs.lib; {
-      description = "Zero-trust orchestrator for MLX inference and container-based sandboxes on Apple Silicon.";
+      description = "Zero-trust orchestrator for MLX inference, container-based sandboxes, and MCP services on Apple Silicon.";
           homepage = "https://github.com/tappunk/muthr";
           license = licenses.asl20;
           maintainers = [ ];

@@ -4,11 +4,11 @@ version = "0.1.46"
 edition = "2024"
 rust-version = "1.95"
 authors = ["tappunk"]
-description = "Zero-trust orchestrator for local MLX inference and container-based sandbox VMs on Apple Silicon"
+description = "Zero-trust orchestrator for MLX inference, container-based sandboxes, and MCP services on Apple Silicon"
 repository = "https://github.com/tappunk/muthr"
 license = "Apache-2.0"
 readme = "README.md"
-keywords = ["cli", "mlxcel", "macos", "apple-container", "apple-silicon"]
+keywords = ["cli", "llama", "macos", "apple-container", "apple-silicon"]
 categories = [
   "command-line-utilities",
   "virtualization",
@@ -24,12 +24,9 @@ tokio = { version = "=1.52.3", features = ["full"] }
 serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = "=1.0.150"
 toml = "=0.8.23"
-indicatif = "=0.18.4"
 reqwest = { version = "=0.12.28", features = ["json"] }
 color-eyre = "=0.6.5"
-ini = "=1.3.0"
 glob = "=0.3.3"
-tempfile = "=3.27.0"
 libc = "=0.2.186"
 dirs = "=6.0.0"
 serde_yaml = "=0.9.34"
