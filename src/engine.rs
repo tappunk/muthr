@@ -12,74 +12,69 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use clap::ValueEnum;
-use serde::{Deserialize, Serialize};
-use std::io::IsTerminal;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::time::Duration;
+
 use tokio::fs;
 use tokio::process::Command as AsyncCommand;
+use tokio::signal::unix::{SignalKind, signal};
 
+use crate::config;
 use crate::model;
-use crate::preset;
-use crate::ui;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
-#[serde(rename_all = "kebab-case")]
-pub enum EngineRuntime {
-    #[value(name = "mlxcel")]
-    Mlxcel,
-}
+pub const ENGINE_NAME: &str = "mlxcel";
+pub const EXECUTABLE: &str = "mlxcel-server";
+pub const PID_FILE_NAME: &str = "mlxcel-server.pid";
+pub const ACTIVE_PRESET_FILE: &str = "active-preset-name-mlxcel";
+pub const LOG_STDOUT: &str = "mlxcel-server.log";
+pub const LOG_RE_ERR: &str = "mlxcel-server-err.log";
 
-impl EngineRuntime {
-    fn as_str(self) -> &'static str {
-        "mlxcel"
-    }
-
-    fn pid_file_name(self) -> &'static str {
-        "mlxcel-server.pid"
-    }
-
-    fn stdout_log_name(self) -> &'static str {
-        "mlxcel-server.log"
-    }
-
-    fn stderr_log_name(self) -> &'static str {
-        "mlxcel-server-err.log"
-    }
-
-    fn executable(self) -> &'static str {
-        "mlxcel-server"
-    }
-
-    fn active_preset_file_name(self) -> &'static str {
-        "active-preset-name-mlxcel"
-    }
-}
-
-impl std::fmt::Display for EngineRuntime {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_str())
-    }
-}
+const DEFAULT_MODEL_ID: &str = "mlx-community/Qwen3.5-9B-MLX-4bit";
+const BIND_HOST: &str = "127.0.0.1";
 
 pub async fn verify_health(port: u16) -> bool {
-    model::verify_health("127.0.0.1", port).await
+    model::verify_health(BIND_HOST, port).await
 }
 
 fn is_process_alive(pid: u32) -> bool {
     unsafe { libc::kill(pid as i32, 0) == 0 }
 }
 
+fn pid_file_path() -> Option<PathBuf> {
+    std::env::var("HOME")
+        .ok()
+        .map(|h| PathBuf::from(h).join(format!(".cache/muthr/{}", PID_FILE_NAME)))
+}
+
+fn kill_runtime_target(pid: u32, sig: i32) {
+    let pgid = unsafe { libc::getpgid(pid as i32) };
+    if pgid > 0 {
+        unsafe {
+            libc::kill(-pgid, sig);
+        }
+    } else {
+        unsafe {
+            libc::kill(pid as i32, sig);
+        }
+    }
+}
+
+fn matches_runtime_process(comm: &str, args: &str) -> bool {
+    comm == EXECUTABLE || args.contains(" mlxcel-server") || args.contains("/mlxcel-server")
+}
+
 async fn is_runtime_pid(pid: u32) -> bool {
     if !is_process_alive(pid) {
         return false;
     }
+
     let output = AsyncCommand::new("ps")
         .args(["-p", &pid.to_string(), "-o", "comm=", "-o", "args="])
         .output()
         .await;
+
     if let Ok(out) = output {
         let ps_output = String::from_utf8_lossy(&out.stdout);
         for line in ps_output.lines() {
@@ -95,15 +90,8 @@ async fn is_runtime_pid(pid: u32) -> bool {
             }
         }
     }
-    false
-}
 
-fn matches_runtime_process(comm: &str, args: &str) -> bool {
-    comm == "mlxcel-server"
-        || comm == "mlxcel"
-        || args.contains(" mlxcel-server")
-        || args.contains("/mlxcel-server")
-        || (args.contains("mlxcel") && args.contains(" serve "))
+    false
 }
 
 async fn list_runtime_pids() -> Vec<u32> {
@@ -197,11 +185,32 @@ async fn list_container_sandboxes() -> Vec<(String, String)> {
     rows
 }
 
-pub async fn is_running(runtime: EngineRuntime) -> bool {
-    let home = std::env::var("HOME");
-    let pid_file = match home {
-        Ok(ref h) => PathBuf::from(h).join(format!(".cache/muthr/{}", runtime.pid_file_name())),
-        Err(_) => return false,
+fn resolve_model_id(profile: Option<String>) -> String {
+    profile
+        .map(|p| p.trim().to_string())
+        .filter(|p| !p.is_empty())
+        .or_else(|| {
+            config::load()
+                .ok()
+                .and_then(|cfg| cfg.default_engine_profile)
+                .map(|p| p.trim().to_string())
+                .filter(|p| !p.is_empty())
+        })
+        .unwrap_or_else(|| DEFAULT_MODEL_ID.to_string())
+}
+
+fn build_command(model_id: &str, host: &str, port: u16) -> std::process::Command {
+    let mut cmd = std::process::Command::new(EXECUTABLE);
+    cmd.arg("--model").arg(model_id);
+    cmd.arg("--host").arg(host);
+    cmd.arg("--port").arg(port.to_string());
+    cmd
+}
+
+pub async fn is_running() -> bool {
+    let pid_file = match pid_file_path() {
+        Some(path) => path,
+        None => return !list_runtime_pids().await.is_empty(),
     };
 
     if pid_file.exists() {
@@ -232,234 +241,123 @@ pub async fn start(
     profile: Option<String>,
     port: u16,
     foreground: bool,
-    runtime: EngineRuntime,
 ) -> Result<(), color_eyre::Report> {
-    let target_profile = match profile {
-        Some(p) => p,
-        None => {
-            let presets = preset::list_presets()?;
-            if presets.is_empty() {
-                eprintln!("none");
-                eprintln!("info: no presets in ~/.config/muthr/provider.d/mlxcel");
-                eprintln!("info: run 'muthr init' to install default presets");
-                return Ok(());
-            }
-
-            let names: Vec<&str> = presets.iter().map(|p| p.name.as_str()).collect();
-            match ui::select_list(&names) {
-                Some(idx) => presets[idx].name.clone(),
-                None => return Ok(()),
-            }
-        }
-    };
-
-    let preset_path = preset::resolve_preset(&target_profile).ok_or_else(|| {
-        color_eyre::eyre::eyre!(
-            "preset not found: {} (run 'muthr init' to install default presets)",
-            target_profile
-        )
-    })?;
-
-    apply_vram_limits(foreground).await;
+    let _engine_lock = crate::lifecycle::acquire("engine", Duration::from_secs(20)).await?;
+    let model_id = resolve_model_id(profile);
 
     let home = std::env::var("HOME")?;
     let cache_dir = PathBuf::from(&home).join(".cache/muthr");
     fs::create_dir_all(&cache_dir).await?;
 
-    let tmp_preset = cache_dir.join("active-preset.ini");
-    let raw_content = fs::read_to_string(&preset_path).await?;
-    let mut expanded_lines: Vec<String> = Vec::new();
-    for line in raw_content.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            expanded_lines.push(line.to_string());
-            continue;
+    let log_stdout = cache_dir.join(LOG_STDOUT);
+    let log_stderr = cache_dir.join(LOG_RE_ERR);
+    let pid_file = cache_dir.join(PID_FILE_NAME);
+
+    let existing_pids = list_runtime_pids().await;
+    if !existing_pids.is_empty() {
+        eprintln!(
+            "warning: found running {} process(es), stopping before start",
+            ENGINE_NAME
+        );
+        for pid in existing_pids {
+            stop_pid(pid).await;
         }
-
-        if let Some(eq_pos) = line.find('=') {
-            let key = line[..eq_pos].trim().to_ascii_lowercase();
-            let is_path_like = key == "model" || key == "path" || key.ends_with("-path");
-            if is_path_like {
-                let value = line[eq_pos + 1..].trim();
-                let expanded_value = if value == "~" {
-                    Some(home.clone())
-                } else {
-                    value
-                        .strip_prefix("~/")
-                        .map(|stripped| format!("{}/{}", home, stripped))
-                };
-
-                if let Some(expanded_value) = expanded_value {
-                    expanded_lines.push(format!(
-                        "{} = {}",
-                        line[..eq_pos].trim_end(),
-                        expanded_value
-                    ));
-                    continue;
-                }
-            }
-        }
-
-        expanded_lines.push(line.to_string());
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     }
-
-    let expanded = expanded_lines.join("\n");
-    fs::write(&tmp_preset, expanded).await?;
-    fs::write(
-        cache_dir.join(runtime.active_preset_file_name()),
-        &target_profile,
-    )
-    .await?;
-
-    let preset = preset::parse_preset(&tmp_preset)?;
-    let bind_host = preset
-        .global
-        .host
-        .clone()
-        .unwrap_or_else(|| "127.0.0.1".to_string());
-    let server_port = preset.global.port.unwrap_or(port as u32) as u16;
-
-    let log_stdout = cache_dir.join(runtime.stdout_log_name());
-    let log_stderr = cache_dir.join(runtime.stderr_log_name());
-    let pid_file = cache_dir.join(runtime.pid_file_name());
-
-    if !foreground && pid_file.exists() {
-        let stale = || async { fs::remove_file(&pid_file).await.ok() };
-
-        if let Ok(pid_bytes) = fs::read_to_string(&pid_file).await
-            && let Ok(old_pid) = pid_bytes.trim().parse::<u32>()
-        {
-            if is_runtime_pid(old_pid).await {
-                eprintln!(
-                    "warning: server already running (pid {}), stopping first",
-                    old_pid
-                );
-                let _ = stop(runtime).await;
-                fs::remove_file(&pid_file).await.ok();
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-            } else {
-                stale().await;
-            }
-        }
-    }
-
-    let args = build_mlxcel_args(&preset, bind_host.clone(), server_port)?;
+    fs::remove_file(&pid_file).await.ok();
 
     if foreground {
-        eprintln!(
-            "info: {} starting on {}:{}",
-            runtime, bind_host, server_port
-        );
+        eprintln!("info: {} starting on {}:{}", ENGINE_NAME, BIND_HOST, port);
 
-        let mut child = AsyncCommand::new(runtime.executable())
-            .args(&args)
+        let mut child = AsyncCommand::new(EXECUTABLE);
+        child
+            .arg("--model")
+            .arg(&model_id)
+            .arg("--host")
+            .arg(BIND_HOST)
+            .arg("--port")
+            .arg(port.to_string())
             .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
-            .spawn()?;
+            .stderr(Stdio::inherit());
 
-        let status = child.wait().await?;
-        if !status.success() {
-            eprintln!("error: server exited with code {}", status);
-        }
-        Ok(())
-    } else {
-        eprintln!(
-            "{} starting (background) on {}:{}",
-            runtime, bind_host, server_port
-        );
+        let mut child = child.spawn()?;
+        let child_pid = child.id().unwrap_or_default();
 
-        let stdout_file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&log_stdout)?;
-        let stderr_file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&log_stderr)?;
+        let active_model_path = cache_dir.join(ACTIVE_PRESET_FILE);
+        fs::write(&active_model_path, &model_id).await?;
 
-        let mut cmd = std::process::Command::new(runtime.executable());
-        cmd.args(&args).stdout(stdout_file).stderr(stderr_file);
+        let mut sigterm = signal(SignalKind::terminate())?;
+        let mut sigint = signal(SignalKind::interrupt())?;
 
-        unsafe {
-            cmd.pre_exec(|| {
-                if libc::setsid() == -1 {
-                    return Err(std::io::Error::last_os_error());
+        loop {
+            tokio::select! {
+                maybe_status = child.wait() => {
+                    let status = maybe_status?;
+                    if !status.success() {
+                        eprintln!("error: server exited with code {}", status);
+                    }
+                    return Ok(());
                 }
-                Ok(())
-            });
-        }
-
-        match cmd.spawn() {
-            Ok(c) => {
-                let pid = c.id();
-                fs::write(&pid_file, pid.to_string()).await?;
-                eprintln!("info: started pid {}", pid);
-                Ok(())
+                _ = sigterm.recv() => {
+                    if child_pid != 0 {
+                        eprintln!("info: forwarding SIGTERM to {} pid {}", ENGINE_NAME, child_pid);
+                        kill_runtime_target(child_pid, libc::SIGTERM);
+                    }
+                }
+                _ = sigint.recv() => {
+                    if child_pid != 0 {
+                        eprintln!("info: forwarding SIGINT to {} pid {}", ENGINE_NAME, child_pid);
+                        kill_runtime_target(child_pid, libc::SIGTERM);
+                    }
+                }
             }
-            Err(e) => Err(e.into()),
         }
+    }
+
+    eprintln!(
+        "{} starting (background) on {}:{}",
+        ENGINE_NAME, BIND_HOST, port
+    );
+
+    let stdout_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_stdout)?;
+    let stderr_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_stderr)?;
+
+    let mut cmd = build_command(&model_id, BIND_HOST, port);
+    cmd.stdout(stdout_file).stderr(stderr_file);
+
+    unsafe {
+        cmd.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+
+    match cmd.spawn() {
+        Ok(c) => {
+            let pid = c.id();
+            fs::write(&pid_file, pid.to_string()).await?;
+            let active_model_path = cache_dir.join(ACTIVE_PRESET_FILE);
+            fs::write(&active_model_path, &model_id).await?;
+            eprintln!("info: started pid {}", pid);
+            Ok(())
+        }
+        Err(e) => Err(e.into()),
     }
 }
 
-fn build_mlxcel_args(
-    preset: &preset::Preset,
-    bind_host: String,
-    server_port: u16,
-) -> Result<Vec<String>, color_eyre::Report> {
-    let mut args: Vec<String> = Vec::new();
-
-    if let Some(slot) = preset.slots.first()
-        && let Some(model_path) = &slot.model_path
-    {
-        let expanded_model = preset::expand_home(model_path);
-        args.push("-m".to_string());
-        args.push(expanded_model.to_string_lossy().to_string());
-    } else {
-        return Err(color_eyre::eyre::eyre!(
-            "preset '{}' has no model configured; define 'model = ...' in the first slot",
-            preset.name
-        ));
-    }
-
-    args.push("--host".to_string());
-    args.push(bind_host);
-    args.push("--port".to_string());
-    args.push(server_port.to_string());
-
-    if let Some(slot) = preset.slots.first() {
-        if let Some(max_out) = slot.max_output_tokens {
-            args.push("--predict".to_string());
-            args.push(max_out.to_string());
-        }
-        if let Some(temp) = slot.temp {
-            args.push("--temp".to_string());
-            args.push(temp.to_string());
-        }
-        if let Some(top_p) = slot.top_p {
-            args.push("--top-p".to_string());
-            args.push(top_p.to_string());
-        }
-        if let Some(top_k) = slot.top_k {
-            args.push("--top-k".to_string());
-            args.push(top_k.to_string());
-        }
-        if let Some(min_p) = slot.min_p {
-            args.push("--min-p".to_string());
-            args.push(min_p.to_string());
-        }
-        if let Some(rp) = slot.repeat_penalty {
-            args.push("--repeat-penalty".to_string());
-            args.push(rp.to_string());
-        }
-    }
-
-    Ok(args)
-}
-
-pub async fn stop(runtime: EngineRuntime) -> Result<(), color_eyre::Report> {
+pub async fn stop() -> Result<(), color_eyre::Report> {
+    let _engine_lock = crate::lifecycle::acquire("engine", Duration::from_secs(20)).await?;
     let home = std::env::var("HOME")?;
     let cache_dir = PathBuf::from(&home).join(".cache/muthr");
-    let pid_file = cache_dir.join(runtime.pid_file_name());
+    let pid_file = cache_dir.join(PID_FILE_NAME);
 
     let mut target_pids = Vec::new();
     if pid_file.exists()
@@ -471,7 +369,7 @@ pub async fn stop(runtime: EngineRuntime) -> Result<(), color_eyre::Report> {
         } else {
             eprintln!(
                 "warning: stale pid file for non-{} process {}, removing",
-                runtime, pid,
+                ENGINE_NAME, pid
             );
         }
     }
@@ -488,7 +386,7 @@ pub async fn stop(runtime: EngineRuntime) -> Result<(), color_eyre::Report> {
     }
 
     for pid in target_pids {
-        stop_pid(pid, runtime).await;
+        stop_pid(pid).await;
     }
 
     fs::remove_file(&pid_file).await.ok();
@@ -496,19 +394,16 @@ pub async fn stop(runtime: EngineRuntime) -> Result<(), color_eyre::Report> {
 }
 
 pub async fn stop_all() -> Result<(), color_eyre::Report> {
-    stop(EngineRuntime::Mlxcel).await?;
-    Ok(())
+    stop().await
 }
 
-async fn stop_pid(pid: u32, runtime: EngineRuntime) {
-    if !is_process_alive(pid) {
+async fn stop_pid(pid: u32) {
+    if !is_runtime_pid(pid).await {
         return;
     }
 
-    eprintln!("info: stopping {} pid {}", runtime, pid);
-    unsafe {
-        libc::kill(pid as i32, libc::SIGTERM);
-    }
+    eprintln!("info: stopping {} pid {}", ENGINE_NAME, pid);
+    kill_runtime_target(pid, libc::SIGTERM);
 
     let mut died = false;
     for _ in 0..30 {
@@ -520,16 +415,14 @@ async fn stop_pid(pid: u32, runtime: EngineRuntime) {
     }
 
     if died {
-        eprintln!("info: stopped {} pid {}", runtime, pid);
+        eprintln!("info: stopped {} pid {}", ENGINE_NAME, pid);
     } else {
         eprintln!(
             "warning: sigterm failed for {} pid {}, escalating to sigkill",
-            runtime, pid
+            ENGINE_NAME, pid
         );
-        unsafe {
-            libc::kill(pid as i32, libc::SIGKILL);
-        }
-        eprintln!("info: killed {} pid {}", runtime, pid);
+        kill_runtime_target(pid, libc::SIGKILL);
+        eprintln!("info: killed {} pid {}", ENGINE_NAME, pid);
     }
 }
 
@@ -537,20 +430,18 @@ pub async fn status(output: crate::OutputFormat) -> Result<(), color_eyre::Repor
     let home = std::env::var("HOME")?;
     let cache_dir = PathBuf::from(&home).join(".cache/muthr");
 
-    let mlxcel_preset_name =
-        fs::read_to_string(cache_dir.join(EngineRuntime::Mlxcel.active_preset_file_name()))
-            .await
-            .ok()
-            .map(|s| s.trim().to_string())
-            .unwrap_or_default();
+    let active_model = fs::read_to_string(cache_dir.join(ACTIVE_PRESET_FILE))
+        .await
+        .ok()
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
 
-    let mlxcel_running = is_running(EngineRuntime::Mlxcel).await;
-    let any_running = mlxcel_running;
-    let any_preset = !mlxcel_preset_name.is_empty();
+    let running = is_running().await;
+    let any_model = !active_model.is_empty();
 
-    let overall_state = if !any_preset {
+    let overall_state = if !any_model {
         "not_configured"
-    } else if any_running {
+    } else if running {
         "running"
     } else {
         "configured_stopped"
@@ -559,24 +450,24 @@ pub async fn status(output: crate::OutputFormat) -> Result<(), color_eyre::Repor
     if output == crate::OutputFormat::Json || output == crate::OutputFormat::Ndjson {
         let payload = serde_json::json!({
             "state": overall_state,
-            "mlxcel": {
-                "preset": if mlxcel_preset_name.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(mlxcel_preset_name.clone()) },
-                "server_running": mlxcel_running,
+            ENGINE_NAME: {
+                "model": if active_model.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(active_model.clone()) },
+                "server_running": running,
             }
         });
         println!("{}", serde_json::to_string(&payload)?);
         return Ok(());
     }
 
-    if !any_preset {
+    if !any_model {
         eprintln!("muthr: not configured");
-    } else if any_running {
+    } else if running {
         eprintln!("muthr: running");
     } else {
         eprintln!("muthr: configured, stopped");
     }
 
-    print_runtime_status(EngineRuntime::Mlxcel, &mlxcel_preset_name, mlxcel_running);
+    print_runtime_status(&active_model, running);
 
     let services_container = "muthr-services";
     let searxng_container = "muthr-searxng";
@@ -697,143 +588,43 @@ pub async fn status(output: crate::OutputFormat) -> Result<(), color_eyre::Repor
     Ok(())
 }
 
-fn print_runtime_status(runtime: EngineRuntime, preset_name: &str, is_running: bool) {
-    if preset_name.is_empty() {
-        eprintln!("  engine {:<10} (none)", runtime);
+fn print_runtime_status(model_id: &str, is_running: bool) {
+    if model_id.is_empty() {
+        eprintln!("  engine {:<10} (none)", ENGINE_NAME);
     } else {
-        let preset =
-            preset::resolve_preset(preset_name).and_then(|p| preset::parse_preset(&p).ok());
-        let profile_label = preset
-            .as_ref()
-            .map(|p| p.name.as_str())
-            .unwrap_or(preset_name);
-        eprintln!("  engine {:<10} active      {}", runtime, profile_label);
+        eprintln!("  engine {:<10} active      {}", ENGINE_NAME, model_id);
     }
 
     if is_running {
-        eprintln!("  server {:<10} running", runtime);
+        eprintln!("  server {:<10} running", ENGINE_NAME);
     } else {
-        eprintln!("  server {:<10} stopped", runtime);
+        eprintln!("  server {:<10} stopped", ENGINE_NAME);
     }
 }
 
-pub fn presets(
-    output: crate::OutputFormat,
-    _runtime: EngineRuntime,
-) -> Result<(), color_eyre::Report> {
-    let runtime = EngineRuntime::Mlxcel;
-    let presets = preset::list_presets()?;
-    if presets.is_empty() {
-        if output == crate::OutputFormat::Json {
-            println!("[]");
-        } else if output == crate::OutputFormat::Ndjson {
-        } else {
-            eprintln!("none");
-            eprintln!("info: no presets in ~/.config/muthr/provider.d/{}", runtime);
-            eprintln!("info: run 'muthr init' to install default presets");
-        }
-        return Ok(());
-    }
+pub fn presets(output: crate::OutputFormat) -> Result<(), color_eyre::Report> {
+    let default_model = config::load()?
+        .default_engine_profile
+        .unwrap_or_else(|| DEFAULT_MODEL_ID.to_string());
 
     if output == crate::OutputFormat::Json {
-        let payload: Vec<serde_json::Value> = presets
-            .iter()
-            .map(|p| {
-                serde_json::json!({
-                    "id": format!("{}/{}.ini", runtime.as_str(), p.name),
-                    "runtime": runtime.as_str(),
-                    "file": format!("{}.ini", p.name),
-                })
-            })
-            .collect();
+        let payload = vec![serde_json::json!({
+            "id": default_model,
+            "runtime": ENGINE_NAME,
+        })];
         println!("{}", serde_json::to_string(&payload)?);
         return Ok(());
     }
 
     if output == crate::OutputFormat::Ndjson {
-        for p in &presets {
-            let payload = serde_json::json!({
-                "id": format!("{}/{}.ini", runtime.as_str(), p.name),
-                "runtime": runtime.as_str(),
-                "file": format!("{}.ini", p.name),
-            });
-            println!("{}", serde_json::to_string(&payload)?);
-        }
+        let payload = serde_json::json!({
+            "id": default_model,
+            "runtime": ENGINE_NAME,
+        });
+        println!("{}", serde_json::to_string(&payload)?);
         return Ok(());
     }
 
-    for p in &presets {
-        eprintln!("{}/{}.ini", runtime.as_str(), p.name);
-    }
-
+    eprintln!("{}", default_model);
     Ok(())
-}
-
-async fn apply_vram_limits(_foreground: bool) {
-    let mem_bytes = sysctl_memsize().await;
-    let threshold: u64 = 32 * 1024 * 1024 * 1024;
-
-    if mem_bytes >= threshold {
-        let gb = mem_bytes / 1024 / 1024 / 1024;
-
-        let wired_mb = (mem_bytes / 1024 / 1024) * 85 / 100;
-
-        if !std::io::stdin().is_terminal() {
-            eprintln!(
-                "info: skipping iogpu tuning in non-interactive session, run 'sudo sysctl -w iogpu.wired_limit_mb={}' manually",
-                wired_mb
-            );
-            return;
-        }
-
-        eprintln!(
-            "info: tuning iogpu.wired_limit_mb={} ({}gb host)",
-            wired_mb, gb
-        );
-
-        let status = tokio::time::timeout(
-            std::time::Duration::from_secs(10),
-            AsyncCommand::new("sudo")
-                .args([
-                    "-n",
-                    "sysctl",
-                    "-w",
-                    &format!("iogpu.wired_limit_mb={}", wired_mb),
-                ])
-                .stdin(Stdio::null())
-                .kill_on_drop(true)
-                .stdout(Stdio::inherit())
-                .stderr(Stdio::inherit())
-                .status(),
-        )
-        .await;
-
-        match status {
-            Ok(Ok(s)) if s.success() => eprintln!("info: iogpu limits applied"),
-            _ => {
-                eprintln!("warning: iogpu tuning skipped (sudo non-interactive unavailable)");
-                eprintln!(
-                    "info: run 'sudo sysctl -w iogpu.wired_limit_mb={}' manually",
-                    wired_mb
-                );
-            }
-        }
-    }
-}
-
-async fn sysctl_memsize() -> u64 {
-    let output = AsyncCommand::new("sysctl")
-        .arg("-n")
-        .arg("hw.memsize")
-        .output()
-        .await;
-
-    match output {
-        Ok(out) if out.status.success() => {
-            let raw = String::from_utf8_lossy(&out.stdout);
-            let digits: String = raw.chars().filter(|c| c.is_ascii_digit()).collect();
-            digits.parse::<u64>().unwrap_or(0)
-        }
-        _ => 0,
-    }
 }

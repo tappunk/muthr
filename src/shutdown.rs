@@ -14,11 +14,6 @@
 
 use tokio::process::Command as AsyncCommand;
 
-use crate::engine;
-use crate::engine::EngineRuntime;
-
-const DEFAULT_TIMEOUT_SECS: u64 = 30;
-
 async fn discover_sandbox_containers() -> Vec<String> {
     let output = AsyncCommand::new("container")
         .args(["list", "--all", "--format", "json"])
@@ -39,9 +34,20 @@ async fn discover_sandbox_containers() -> Vec<String> {
                                 .and_then(|v| v.get("id"))
                                 .and_then(|v| v.as_str())
                         })?;
+                        let labels = item.get("configuration").and_then(|v| v.get("labels"));
+                        let managed = labels
+                            .and_then(|v| v.get("muthr.managed"))
+                            .and_then(|v| v.as_str())
+                            .is_some_and(|v| v == "true");
+                        let owner_project = labels
+                            .and_then(|v| v.get("muthr.owner"))
+                            .and_then(|v| v.as_str())
+                            .is_some_and(|v| v == "project");
                         if id.starts_with("muthr-")
                             && id != "muthr-services"
                             && id != "muthr-searxng"
+                            && managed
+                            && owner_project
                         {
                             Some(id.to_string())
                         } else {
@@ -71,35 +77,45 @@ async fn stop_container(name: String, timeout_secs: u64, verbose: bool) {
     }
 }
 
-async fn stop_runtime(runtime: EngineRuntime, verbose: bool) {
-    if let Err(err) = engine::stop(runtime).await {
-        eprintln!("warning: failed to stop {} runtime: {}", runtime, err);
-    }
+async fn stop_engine(verbose: bool) {
+    let mut had_any = false;
 
-    if engine::is_running(runtime).await {
-        eprintln!(
-            "warning: {} runtime still running after stop request; retrying",
-            runtime
-        );
-        if let Err(err) = engine::stop(runtime).await {
-            eprintln!(
-                "warning: second stop attempt failed for {}: {}",
-                runtime, err
-            );
+    if crate::engine::is_running().await {
+        had_any = true;
+        if let Err(err) = crate::engine::stop().await {
+            eprintln!("warning: failed to stop inference engine: {}", err);
         }
     }
 
-    if verbose && !engine::is_running(runtime).await {
-        eprintln!("info: {} runtime stopped", runtime);
+    if had_any {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        if crate::engine::is_running().await {
+            eprintln!("warning: inference engine still running after stop request; retrying");
+            if let Err(err) = crate::engine::stop().await {
+                eprintln!("warning: second stop attempt failed: {}", err);
+            }
+        }
+    }
+
+    if verbose && had_any && !crate::engine::is_running().await {
+        eprintln!("info: inference engine stopped");
     }
 }
 
-pub async fn run(verbose: bool, timeout_secs: Option<u64>, _yes: bool, dry_run: bool) {
+pub async fn run(
+    verbose: bool,
+    timeout_secs: Option<u64>,
+    _yes: bool,
+    dry_run: bool,
+) -> Result<(), color_eyre::Report> {
     if dry_run {
         eprintln!("info: dry run, skipping shutdown actions");
-        return;
+        return Ok(());
     }
-    let timeout = timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS);
+    let _lock =
+        crate::lifecycle::acquire("container-lifecycle", std::time::Duration::from_secs(20))
+            .await?;
+    let timeout = timeout_secs.unwrap_or(30);
 
     if verbose {
         eprintln!("info: scanning containers");
@@ -117,9 +133,11 @@ pub async fn run(verbose: bool, timeout_secs: Option<u64>, _yes: bool, dry_run: 
     if verbose {
         eprintln!("info: stopping inference engine");
     }
-    stop_runtime(EngineRuntime::Mlxcel, verbose).await;
+    stop_engine(verbose).await;
 
     if verbose {
         eprintln!("info: shutdown complete");
     }
+
+    Ok(())
 }

@@ -13,10 +13,40 @@
 // limitations under the License.
 
 use std::io::IsTerminal;
+use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
+fn has_label(item: &serde_json::Value, key: &str, expected: &str) -> bool {
+    item.get("configuration")
+        .and_then(|v| v.get("labels"))
+        .and_then(|v| v.get(key))
+        .and_then(|v| v.as_str())
+        .is_some_and(|v| v == expected)
+}
+
+fn container_matches_id(item: &serde_json::Value, container_id: &str) -> bool {
+    item.get("id").and_then(|v| v.as_str()).or_else(|| {
+        item.get("configuration")
+            .and_then(|v| v.get("id"))
+            .and_then(|v| v.as_str())
+    }) == Some(container_id)
+}
+
 const SEARXNG_CONFIG_REV: &str = "v3";
+
+fn generate_searxng_secret() -> Result<String, color_eyre::Report> {
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    let mut bytes = [0_u8; 32];
+    let mut source = std::fs::File::open("/dev/urandom")?;
+    source.read_exact(&mut bytes)?;
+
+    let secret: String = bytes
+        .iter()
+        .map(|byte| ALPHABET[usize::from(*byte) % ALPHABET.len()] as char)
+        .collect();
+    Ok(secret)
+}
 
 fn discover_container_gateway() -> Option<String> {
     let output = Command::new("container")
@@ -114,7 +144,7 @@ pub async fn start(dry_run: bool) -> Result<(), color_eyre::Report> {
     let home = std::env::var("HOME")?;
     let searxng_settings_path = ensure_searxng_settings(&home)?;
 
-    if is_container_exists(searxng_container_id)
+    if is_container_exists_any(searxng_container_id)
         && !container_has_label(searxng_container_id, "muthr.config-rev", SEARXNG_CONFIG_REV)
     {
         eprintln!("info: recreating muthr-searxng container for updated config");
@@ -128,12 +158,13 @@ pub async fn start(dry_run: bool) -> Result<(), color_eyre::Report> {
         }
     }
 
-    if !is_container_exists(searxng_container_id) {
+    if !is_container_exists_any(searxng_container_id) {
         eprintln!("info: creating muthr-searxng container");
         let settings_mount = format!(
             "{}:/etc/searxng/settings.yml",
             searxng_settings_path.to_string_lossy()
         );
+        let searxng_secret = generate_searxng_secret()?;
         let status = Command::new("container")
             .args([
                 "create",
@@ -141,15 +172,19 @@ pub async fn start(dry_run: bool) -> Result<(), color_eyre::Report> {
                 searxng_container_id,
                 "--detach",
                 "--label",
+                "muthr.managed=true",
+                "--label",
+                "muthr.owner=services",
+                "--label",
                 "muthr.config-rev=v3",
                 "--publish",
                 "18766:8080",
                 "--volume",
                 &settings_mount,
                 "--env",
-                "SEARXNG_SECRET=change-this-in-local-config",
-                "docker.io/searxng/searxng:latest",
             ])
+            .arg(format!("SEARXNG_SECRET={}", searxng_secret))
+            .arg("docker.io/searxng/searxng:latest")
             .status()?;
         if !status.success() {
             return Err(color_eyre::eyre::eyre!(
@@ -170,7 +205,7 @@ pub async fn start(dry_run: bool) -> Result<(), color_eyre::Report> {
         }
     }
 
-    if !is_container_exists(container_id) {
+    if !is_container_exists_any(container_id) {
         eprintln!("info: creating muthr-services container");
         let status = Command::new("container")
             .args([
@@ -178,6 +213,10 @@ pub async fn start(dry_run: bool) -> Result<(), color_eyre::Report> {
                 "--name",
                 container_id,
                 "--detach",
+                "--label",
+                "muthr.managed=true",
+                "--label",
+                "muthr.owner=services",
                 "--publish",
                 "127.0.0.1:18765:18765",
                 "--workdir",
@@ -244,12 +283,16 @@ pub async fn start(dry_run: bool) -> Result<(), color_eyre::Report> {
         }
 
         let mut provision_cmd = Command::new("container");
-        provision_cmd
-            .args(["exec", "--env"])
-            .arg(format!("MUTHR_SEARXNG_URL={}", searxng_url))
-            .args([container_id, "bash", "/tmp/muthr-services.sh", container_id])
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit());
+        provision_cmd.args([
+            "exec",
+            "--env",
+            &format!("MUTHR_SEARXNG_URL={}", searxng_url),
+            "--user",
+            "muthr",
+            container_id,
+            "bash",
+            "/tmp/muthr-services.sh",
+        ]);
         if provision_cmd.status()?.success() {
             eprintln!("info: muthr-services container provisioned");
         } else {
@@ -399,12 +442,28 @@ fn is_container_exists(container_id: &str) -> bool {
             .ok()
             .is_some_and(|items| {
                 items.iter().any(|item| {
-                    item.get("id").and_then(|v| v.as_str()).or_else(|| {
-                        item.get("configuration")
-                            .and_then(|v| v.get("id"))
-                            .and_then(|v| v.as_str())
-                    }) == Some(container_id)
+                    container_matches_id(item, container_id)
+                        && has_label(item, "muthr.managed", "true")
                 })
+            }),
+        None => false,
+    }
+}
+
+fn is_container_exists_any(container_id: &str) -> bool {
+    let output = Command::new("container")
+        .args(["list", "--all", "--format", "json"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success());
+
+    match output {
+        Some(out) => serde_json::from_slice::<Vec<serde_json::Value>>(&out.stdout)
+            .ok()
+            .is_some_and(|items| {
+                items
+                    .iter()
+                    .any(|item| container_matches_id(item, container_id))
             }),
         None => false,
     }
@@ -422,17 +481,13 @@ fn is_container_running(container_id: &str) -> bool {
                 .ok()
                 .is_some_and(|items| {
                     items.iter().any(|item| {
-                        let id = item.get("id").and_then(|v| v.as_str()).or_else(|| {
-                            item.get("configuration")
-                                .and_then(|v| v.get("id"))
-                                .and_then(|v| v.as_str())
-                        });
+                        let id_matches = container_matches_id(item, container_id);
                         let state = item
                             .get("status")
                             .and_then(|v| v.get("state"))
                             .and_then(|v| v.as_str())
                             .or_else(|| item.get("state").and_then(|v| v.as_str()));
-                        id == Some(container_id) && state == Some("running")
+                        id_matches && state == Some("running")
                     })
                 })
         }
@@ -452,17 +507,12 @@ fn container_has_label(container_id: &str, key: &str, expected: &str) -> bool {
                 .ok()
                 .is_some_and(|items| {
                     items.iter().any(|item| {
-                        let id = item.get("id").and_then(|v| v.as_str()).or_else(|| {
-                            item.get("configuration")
-                                .and_then(|v| v.get("id"))
-                                .and_then(|v| v.as_str())
-                        });
                         let label = item
                             .get("configuration")
                             .and_then(|v| v.get("labels"))
                             .and_then(|v| v.get(key))
                             .and_then(|v| v.as_str());
-                        id == Some(container_id) && label == Some(expected)
+                        container_matches_id(item, container_id) && label == Some(expected)
                     })
                 })
         }
@@ -497,7 +547,7 @@ fn is_container_provisioned(container_id: &str) -> bool {
 }
 
 fn ensure_services_runtime_baseline(container_id: &str) -> Result<(), color_eyre::Report> {
-    let marker = "/var/lib/muthr/services-baseline-v1";
+    let marker = "/var/lib/muthr/services-baseline-v2";
     let marker_check = Command::new("container")
         .args([
             "exec",
@@ -518,7 +568,7 @@ fn ensure_services_runtime_baseline(container_id: &str) -> Result<(), color_eyre
             container_id,
             "sh",
             "-lc",
-            "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq bash ca-certificates curl nodejs npm",
+            "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq bash ca-certificates curl nodejs npm sudo && if ! id -u muthr >/dev/null 2>&1; then useradd -m -s /bin/bash muthr; fi && usermod -aG sudo muthr && install -d -m 755 /etc/sudoers.d && printf 'muthr ALL=(ALL) NOPASSWD:ALL\\n' >/etc/sudoers.d/muthr && chmod 0440 /etc/sudoers.d/muthr && mkdir -p /home/muthr/.local && chown -R muthr:muthr /home/muthr",
         ])
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())

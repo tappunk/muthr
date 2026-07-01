@@ -160,6 +160,6 @@ pub async fn poll_loaded_model(
     }
 
     Err(color_eyre::eyre::eyre!(
-        "timeout: could not get loaded model from mlxcel-server"
+        "timeout: could not get loaded model from inference server"
     ))
 }

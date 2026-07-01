@@ -14,22 +14,20 @@
 
 pub mod catalog;
 pub mod config;
-pub mod download;
+pub mod doctor;
 pub mod engine;
 pub mod init;
+pub mod lifecycle;
 pub mod model;
-pub mod preset;
 pub mod sandbox;
 pub mod services;
 pub mod shutdown;
-pub mod ui;
 
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{Shell, generate};
 use serde::Serialize;
 
 use crate::config::ConfigCommands;
-use crate::engine::EngineRuntime;
 
 #[derive(Parser)]
 #[command(
@@ -37,7 +35,7 @@ use crate::engine::EngineRuntime;
     version,
     author,
     about = "Manage inference and sandbox containers for local AI development",
-    long_about = "Zero-trust orchestrator for local inference and sandbox containers.\nPrerequisites: macOS arm64, container CLI, configured inference runtime",
+    long_about = "Zero-trust orchestrator for MLX inference, container-based sandboxes, and MCP services on Apple Silicon.",
     arg_required_else_help = false,
     propagate_version = true,
     trailing_var_arg = true
@@ -79,14 +77,10 @@ enum Commands {
     Run {
         #[arg(long, help = "Show detailed progress output during boot")]
         verbose: bool,
-        #[arg(
-            long,
-            value_enum,
-            help = "Inference runtime to start (defaults to config)"
-        )]
-        runtime: Option<EngineRuntime>,
-        #[arg(short, long, help = "Skip confirmation prompts")]
-        yes: bool,
+        #[arg(long, help = "Model repo ID to use (defaults to config)")]
+        profile: Option<String>,
+        #[arg(long, help = "Inference engine runtime (only mlxcel is supported)")]
+        runtime: Option<String>,
         #[arg(short = 'n', long, help = "Preview actions without side effects")]
         dry_run: bool,
     },
@@ -105,16 +99,6 @@ enum Commands {
         yes: bool,
         #[arg(short = 'n', long, help = "Preview actions without side effects")]
         dry_run: bool,
-    },
-
-    #[command(about = "Download model files from huggingface")]
-    Download {
-        #[arg(help = "Hugging Face repository (repo/name) or explicit Hugging Face URL")]
-        source: String,
-        #[arg(help = "Target filename when downloading a single file")]
-        file: Option<String>,
-        #[arg(short, long, value_enum, default_value_t = OutputFormat::Text)]
-        output: OutputFormat,
     },
 
     #[command(about = "Generate shell completion scripts")]
@@ -145,6 +129,9 @@ enum Commands {
         #[command(subcommand)]
         action: ConfigCommands,
     },
+
+    #[command(about = "Run diagnostics and health checks")]
+    Doctor,
 }
 
 #[derive(Subcommand)]
@@ -184,7 +171,7 @@ pub enum ServicesCommands {
 pub enum EngineCommands {
     #[command(about = "Start inference engine runtime")]
     Start {
-        #[arg(long, help = "Name of the target preset profile to load")]
+        #[arg(long, help = "Model repo ID to load")]
         profile: Option<String>,
         #[arg(
             long,
@@ -196,25 +183,21 @@ pub enum EngineCommands {
             help = "Run in foreground (blocking mode) instead of as a background daemon"
         )]
         foreground: bool,
-        #[arg(long, value_enum, default_value_t = EngineRuntime::Mlxcel, hide = true)]
-        runtime: EngineRuntime,
     },
     #[command(about = "Stop inference engine runtime")]
     Stop {
-        #[arg(long, value_enum, help = "Target runtime", hide = true)]
-        runtime: Option<EngineRuntime>,
+        #[arg(long, help = "Stop all running engines")]
+        all: bool,
     },
     #[command(about = "Show engine status")]
     Status {
         #[arg(short, long, value_enum, default_value_t = OutputFormat::Text)]
         output: OutputFormat,
     },
-    #[command(about = "List preset profiles")]
+    #[command(about = "List configured model profiles")]
     Presets {
         #[arg(short, long, value_enum, default_value_t = OutputFormat::Text)]
         output: OutputFormat,
-        #[arg(long, value_enum, default_value_t = EngineRuntime::Mlxcel, hide = true)]
-        runtime: EngineRuntime,
     },
 }
 
@@ -224,7 +207,7 @@ pub enum SandboxCommands {
     Start {
         #[arg(
             long,
-            help = "Profile to apply (run without --profile to list available profiles)"
+            help = "Profile to apply (run without --profile to list available profiles)!"
         )]
         profile: Option<String>,
     },
@@ -254,24 +237,27 @@ async fn main() -> color_eyre::Result<()> {
 
 async fn boot(
     verbose: bool,
-    runtime_override: Option<EngineRuntime>,
+    profile: Option<String>,
+    runtime: Option<String>,
 ) -> Result<(), color_eyre::Report> {
     sandbox::cleanup_untracked_vms(verbose).await?;
 
     let cfg = config::load()?;
-    let runtime = match runtime_override {
-        Some(r) => r,
-        None => cfg.resolved_engine_runtime()?,
-    };
+    let engine_name = runtime
+        .or_else(|| cfg.default_engine_runtime.clone())
+        .unwrap_or_else(|| "mlxcel".to_string());
+    if engine_name != "mlxcel" {
+        return Err(color_eyre::eyre::eyre!(
+            "unsupported engine runtime '{}' (only 'mlxcel' is supported)",
+            engine_name
+        ));
+    }
+    let server_port = cfg.server_port.unwrap_or(8080);
 
-    if engine::is_running(runtime).await {
+    if engine::is_running().await {
         eprintln!("info: engine already running");
     } else {
-        if verbose {
-            eprintln!("info: starting inference engine ({})", runtime);
-        }
-        let server_port = cfg.server_port.unwrap_or(8080);
-        engine::start(None, server_port, false, runtime).await?;
+        engine::start(profile, server_port, false).await?;
     }
 
     if verbose {
@@ -286,24 +272,86 @@ async fn run() -> Result<(), color_eyre::Report> {
     let cli = Cli::parse();
 
     match cli.command {
-        None => engine::status(OutputFormat::Text).await?,
+        None => {
+            let cfg = config::load()?;
+            let engine_name = cfg
+                .default_engine_runtime
+                .clone()
+                .unwrap_or_else(|| "mlxcel".to_string());
+            if engine_name != "mlxcel" {
+                return Err(color_eyre::eyre::eyre!(
+                    "unsupported engine runtime '{}' (only 'mlxcel' is supported)",
+                    engine_name
+                ));
+            }
+            engine::status(OutputFormat::Text).await?
+        }
         Some(Commands::Engine { action }) => match action {
             EngineCommands::Start {
                 profile,
                 engine_server_port,
                 foreground,
-                runtime,
             } => {
                 let cfg = config::load()?;
+                let engine_name = cfg
+                    .default_engine_runtime
+                    .clone()
+                    .unwrap_or_else(|| "mlxcel".to_string());
+                if engine_name != "mlxcel" {
+                    return Err(color_eyre::eyre::eyre!(
+                        "unsupported engine runtime '{}' (only 'mlxcel' is supported)",
+                        engine_name
+                    ));
+                }
                 let server_port = engine_server_port.unwrap_or(cfg.server_port.unwrap_or(8080));
-                engine::start(profile, server_port, foreground, runtime).await?
+                engine::start(profile, server_port, foreground).await?
             }
-            EngineCommands::Status { output } => engine::status(output).await?,
-            EngineCommands::Stop { runtime } => match runtime {
-                Some(r) => engine::stop(r).await?,
-                None => engine::stop_all().await?,
-            },
-            EngineCommands::Presets { output, runtime } => engine::presets(output, runtime)?,
+            EngineCommands::Status { output } => {
+                let cfg = config::load()?;
+                let engine_name = cfg
+                    .default_engine_runtime
+                    .clone()
+                    .unwrap_or_else(|| "mlxcel".to_string());
+                if engine_name != "mlxcel" {
+                    return Err(color_eyre::eyre::eyre!(
+                        "unsupported engine runtime '{}' (only 'mlxcel' is supported)",
+                        engine_name
+                    ));
+                }
+                engine::status(output).await?
+            }
+            EngineCommands::Stop { all } => {
+                if all {
+                    engine::stop_all().await?;
+                } else {
+                    let cfg = config::load()?;
+                    let engine_name = cfg
+                        .default_engine_runtime
+                        .clone()
+                        .unwrap_or_else(|| "mlxcel".to_string());
+                    if engine_name != "mlxcel" {
+                        return Err(color_eyre::eyre::eyre!(
+                            "unsupported engine runtime '{}' (only 'mlxcel' is supported)",
+                            engine_name
+                        ));
+                    }
+                    engine::stop().await?;
+                }
+            }
+            EngineCommands::Presets { output } => {
+                let cfg = config::load()?;
+                let engine_name = cfg
+                    .default_engine_runtime
+                    .clone()
+                    .unwrap_or_else(|| "mlxcel".to_string());
+                if engine_name != "mlxcel" {
+                    return Err(color_eyre::eyre::eyre!(
+                        "unsupported engine runtime '{}' (only 'mlxcel' is supported)",
+                        engine_name
+                    ));
+                }
+                engine::presets(output)?;
+            }
         },
         Some(Commands::Sandbox { action }) => match action {
             SandboxCommands::Start { profile } => {
@@ -389,15 +437,15 @@ async fn run() -> Result<(), color_eyre::Report> {
         Some(Commands::Services { action }) => services::run(action).await?,
         Some(Commands::Run {
             verbose,
+            profile,
             runtime,
-            yes: _,
             dry_run,
         }) => {
             if dry_run {
                 eprintln!("info: dry run, skipping run actions");
                 return Ok(());
             }
-            boot(verbose, runtime).await?
+            boot(verbose, profile, runtime).await?
         }
         Some(Commands::Shutdown {
             verbose,
@@ -405,13 +453,8 @@ async fn run() -> Result<(), color_eyre::Report> {
             yes,
             dry_run,
         }) => {
-            shutdown::run(verbose, timeout, yes, dry_run).await;
+            shutdown::run(verbose, timeout, yes, dry_run).await?;
         }
-        Some(Commands::Download {
-            source,
-            file,
-            output,
-        }) => download::download(&source, file.as_deref(), output).await?,
         Some(Commands::Init { git_url, force }) => {
             tokio::task::spawn_blocking(move || init::run(init::InitCommands { git_url, force }))
                 .await
@@ -424,6 +467,9 @@ async fn run() -> Result<(), color_eyre::Report> {
                 cfg.print_resolved();
             }
         },
+        Some(Commands::Doctor) => {
+            doctor::run().await?;
+        }
         Some(Commands::Completion { shell }) => {
             let mut cmd = Cli::command();
             generate(shell, &mut cmd, "muthr", &mut std::io::stdout());

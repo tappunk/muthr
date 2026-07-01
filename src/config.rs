@@ -18,9 +18,15 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
-use crate::engine::EngineRuntime;
-
-type ResolvedConfig = (u16, String, String, String, String, Option<String>);
+type ResolvedConfig = (
+    u16,
+    String,
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
 
 #[derive(Subcommand)]
 pub enum ConfigCommands {
@@ -38,6 +44,7 @@ pub struct MuthrConfig {
     pub model_dir: Option<String>,
     pub default_provision_profile: Option<String>,
     pub default_engine_runtime: Option<String>,
+    pub default_engine_profile: Option<String>,
     pub container_host_gateway: Option<String>,
 }
 
@@ -58,33 +65,18 @@ impl MuthrConfig {
         let provision_profile = self
             .default_provision_profile
             .unwrap_or_else(|| "opencode".to_string());
-        let engine_runtime = self
-            .default_engine_runtime
-            .unwrap_or_else(|| "mlxcel".to_string());
-        let container_host_gateway = self.container_host_gateway;
+        let engine_runtime = self.default_engine_runtime.clone();
+        let engine_profile = self.default_engine_profile.clone();
+        let container_host_gateway = self.container_host_gateway.clone();
         Ok((
             server_port,
             workspace_root,
             model_dir,
             provision_profile,
             engine_runtime,
+            engine_profile,
             container_host_gateway,
         ))
-    }
-
-    pub fn resolved_engine_runtime(&self) -> Result<EngineRuntime, color_eyre::Report> {
-        match self
-            .default_engine_runtime
-            .as_deref()
-            .unwrap_or("mlxcel")
-            .trim()
-        {
-            "mlxcel" => Ok(EngineRuntime::Mlxcel),
-            other => Err(color_eyre::eyre::eyre!(
-                "invalid default_engine_runtime '{}'; expected 'mlxcel'",
-                other
-            )),
-        }
     }
 
     pub fn print_resolved(&self) {
@@ -94,6 +86,7 @@ impl MuthrConfig {
             model_dir,
             provision_profile,
             engine_runtime,
+            engine_profile,
             container_host_gateway,
         ) = match self.clone().resolve() {
             Ok(v) => v,
@@ -102,11 +95,20 @@ impl MuthrConfig {
                 return;
             }
         };
-        eprintln!("info: server_port       {}", server_port);
+        eprintln!("info: server_port        {}", server_port);
         eprintln!("info: workspace_root    {}", workspace_root);
         eprintln!("info: model_dir         {}", model_dir);
         eprintln!("info: provision_profile {}", provision_profile);
-        eprintln!("info: engine_runtime    {}", engine_runtime);
+        eprintln!(
+            "info: engine_runtime    {}",
+            engine_runtime.as_deref().unwrap_or("mlxcel")
+        );
+        eprintln!(
+            "info: engine_profile    {}",
+            engine_profile
+                .as_deref()
+                .unwrap_or("mlx-community/Qwen3.5-9B-MLX-4bit")
+        );
         eprintln!(
             "info: container_gateway {}",
             container_host_gateway.unwrap_or_else(|| "<auto>".to_string())
@@ -140,6 +142,9 @@ pub fn load() -> Result<MuthrConfig, color_eyre::Report> {
     if let Ok(v) = std::env::var("MUTHR_ENGINE_RUNTIME") {
         config.default_engine_runtime = Some(v);
     }
+    if let Ok(v) = std::env::var("MUTHR_ENGINE_PROFILE") {
+        config.default_engine_profile = Some(v);
+    }
     if let Ok(v) = std::env::var("MUTHR_CONTAINER_HOST_GATEWAY") {
         config.container_host_gateway = Some(v);
     }
@@ -165,6 +170,7 @@ workspace_root = "~/src"
 model_dir = "~/opt/models"
 default_provision_profile = "opencode"
 default_engine_runtime = "mlxcel"
+default_engine_profile = "mlx-community/Qwen3.5-9B-MLX-4bit"
 "##;
 
     fs::write(&config_path, template)?;

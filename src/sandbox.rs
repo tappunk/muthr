@@ -19,6 +19,43 @@ use tokio::fs;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
+struct TerminalStateGuard {
+    fds: Vec<(i32, libc::termios)>,
+}
+
+impl TerminalStateGuard {
+    fn capture() -> Self {
+        let mut fds = Vec::new();
+
+        for fd in [libc::STDIN_FILENO, libc::STDOUT_FILENO, libc::STDERR_FILENO] {
+            // SAFETY: `fd` values are valid process file descriptor integers.
+            let is_tty = unsafe { libc::isatty(fd) } == 1;
+            if !is_tty {
+                continue;
+            }
+
+            // SAFETY: zeroed `termios` is immediately initialized by `tcgetattr` on success.
+            let mut termios = unsafe { std::mem::zeroed::<libc::termios>() };
+            // SAFETY: `fd` is a tty and `termios` points to valid writable memory.
+            let ok = unsafe { libc::tcgetattr(fd, &mut termios as *mut libc::termios) } == 0;
+            if ok {
+                fds.push((fd, termios));
+            }
+        }
+
+        Self { fds }
+    }
+}
+
+impl Drop for TerminalStateGuard {
+    fn drop(&mut self) {
+        for (fd, termios) in &self.fds {
+            // SAFETY: `fd` and `termios` values were captured from successful `tcgetattr` calls.
+            let _ = unsafe { libc::tcsetattr(*fd, libc::TCSANOW, termios as *const libc::termios) };
+        }
+    }
+}
+
 fn sanitize_project_name(name: &str) -> Option<String> {
     let sanitized: String = name
         .chars()
@@ -59,6 +96,8 @@ fn run_container_session(
     }
 
     let run_once = |tty: bool| -> Result<std::process::ExitStatus, color_eyre::Report> {
+        let _terminal_state_guard = tty.then(TerminalStateGuard::capture);
+
         let mut args = vec!["exec"];
         if tty {
             args.push("--interactive");
@@ -66,6 +105,8 @@ fn run_container_session(
         }
         args.push("--workdir");
         args.push(guest_workdir);
+        args.push("--user");
+        args.push("muthr");
         args.push(container_id);
         args.extend_from_slice(target_args);
 
@@ -264,6 +305,9 @@ pub async fn sandbox_exists(container_id: &str) -> bool {
 }
 
 pub async fn cleanup_untracked_vms(verbose: bool) -> Result<(), color_eyre::Report> {
+    let _lock =
+        crate::lifecycle::acquire("container-lifecycle", std::time::Duration::from_secs(20))
+            .await?;
     let home = std::env::var("HOME")?;
     let cache_dir = PathBuf::from(home).join(".cache/muthr");
 
@@ -282,6 +326,28 @@ pub async fn cleanup_untracked_vms(verbose: bool) -> Result<(), color_eyre::Repo
             || container_id == "muthr-services"
             || container_id == "muthr-searxng"
         {
+            continue;
+        }
+
+        let is_managed_project = item
+            .get("configuration")
+            .and_then(|v| v.get("labels"))
+            .and_then(|v| v.get("muthr.managed"))
+            .and_then(|v| v.as_str())
+            .is_some_and(|v| v == "true")
+            && item
+                .get("configuration")
+                .and_then(|v| v.get("labels"))
+                .and_then(|v| v.get("muthr.owner"))
+                .and_then(|v| v.as_str())
+                .is_some_and(|v| v == "project");
+        if !is_managed_project {
+            if verbose {
+                eprintln!(
+                    "info: skipping unlabeled sandbox container {}",
+                    container_id
+                );
+            }
             continue;
         }
 
@@ -309,7 +375,7 @@ pub async fn cleanup_untracked_vms(verbose: bool) -> Result<(), color_eyre::Repo
                 container_id
             );
         }
-        delete_container(&container_id, true).await?;
+        delete_container_impl(&container_id, true).await?;
     }
 
     Ok(())
@@ -363,6 +429,7 @@ pub async fn delete_sandbox(container_id: &str, force: bool) -> Result<(), color
 pub async fn run_provision_script(
     container_id: &str,
     script_name: &str,
+    engine_runtime: &str,
     model_name: &str,
     ctx_window: u32,
     mount_point: &std::path::Path,
@@ -371,6 +438,7 @@ pub async fn run_provision_script(
     run_provision_container(
         container_id,
         script_name,
+        engine_runtime,
         model_name,
         ctx_window,
         mount_point,
@@ -443,42 +511,39 @@ fn collect_regular_files_recursive(root: &Path) -> Result<Vec<PathBuf>, color_ey
     Ok(files)
 }
 
-async fn resolve_active_model_and_ctx(home: &str, server_port: u16) -> (String, u32) {
-    let resolve_preset_model_and_ctx = || async {
-        let preset_name_path = PathBuf::from(home).join(".cache/muthr/active-preset-name-mlxcel");
-        let preset_name = fs::read_to_string(&preset_name_path)
-            .await
-            .ok()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty());
+async fn resolve_active_model_and_ctx(
+    home: &str,
+    server_port: u16,
+    _engine_name: &str,
+) -> (String, u32) {
+    let default_model = crate::config::load()
+        .ok()
+        .and_then(|cfg| cfg.default_engine_profile)
+        .filter(|m| !m.trim().is_empty())
+        .unwrap_or_else(|| "mlx-community/Qwen3.5-9B-MLX-4bit".to_string());
+    let preset_ctx_hint = 131072;
 
-        let parsed = preset_name
-            .as_deref()
-            .and_then(crate::preset::resolve_preset)
-            .and_then(|path| crate::preset::parse_preset(&path).ok())
-            .and_then(|preset| {
-                preset.slots.first().map(|slot| {
-                    let ctx_hint = slot.max_output_tokens.unwrap_or(131072);
-                    (slot.name.clone(), ctx_hint)
-                })
-            });
+    let active_model_file = PathBuf::from(home).join(".cache/muthr/active-preset-name-mlxcel");
+    let active_model_from_file = fs::read_to_string(&active_model_file)
+        .await
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
 
-        parsed.unwrap_or_else(|| ("local-model".to_string(), 131072))
+    let fallback_model = active_model_from_file.unwrap_or_else(|| default_model.clone());
+
+    let parsed_model = match crate::model::poll_loaded_model("127.0.0.1", server_port, 20, 1.0)
+        .await
+    {
+        Ok(model) => model,
+        Err(err) => {
+            eprintln!(
+                "warning: failed to poll loaded model from inference server, using fallback: {}",
+                err
+            );
+            fallback_model.clone()
+        }
     };
-
-    let (default_model, preset_ctx_hint) = resolve_preset_model_and_ctx().await;
-
-    let parsed_model =
-        match crate::model::poll_loaded_model("127.0.0.1", server_port, 20, 1.0).await {
-            Ok(model) => model,
-            Err(err) => {
-                eprintln!(
-                    "warning: failed to poll loaded model from mlxcel-server, using fallback: {}",
-                    err
-                );
-                default_model.clone()
-            }
-        };
     let sanitized_model = if parsed_model.contains('/') || parsed_model.contains('\\') {
         std::path::Path::new(&parsed_model)
             .file_name()
@@ -489,7 +554,7 @@ async fn resolve_active_model_and_ctx(home: &str, server_port: u16) -> (String, 
         parsed_model.clone()
     };
     let active_model = if sanitized_model.trim().is_empty() {
-        default_model
+        fallback_model
     } else {
         sanitized_model
     };
@@ -592,6 +657,9 @@ pub async fn ls(out_fmt: crate::OutputFormat) -> Result<(), color_eyre::Report> 
 }
 
 async fn start_container(profile_name: String) -> Result<(), color_eyre::Report> {
+    let _lock =
+        crate::lifecycle::acquire("container-lifecycle", std::time::Duration::from_secs(20))
+            .await?;
     let (container_id, project_root, workdir) = resolve_workspace_context()?;
     eprintln!("info: target: {}", container_id);
 
@@ -609,6 +677,10 @@ async fn start_container(profile_name: String) -> Result<(), color_eyre::Report>
                 "--name",
                 &container_id,
                 "--detach",
+                "--label",
+                "muthr.managed=true",
+                "--label",
+                "muthr.owner=project",
                 "--volume",
                 &volume,
                 "--workdir",
@@ -654,7 +726,9 @@ async fn start_container(profile_name: String) -> Result<(), color_eyre::Report>
     let home = std::env::var("HOME")?;
     let cfg = crate::config::load()?;
     let server_port = cfg.server_port.unwrap_or(8080);
-    let (active_model, ctx_window) = resolve_active_model_and_ctx(&home, server_port).await;
+    let engine_name = cfg.default_engine_runtime.as_deref().unwrap_or("mlxcel");
+    let (active_model, ctx_window) =
+        resolve_active_model_and_ctx(&home, server_port, engine_name).await;
 
     if profile_name != "base" {
         let cache_dir = PathBuf::from(&home)
@@ -665,6 +739,7 @@ async fn start_container(profile_name: String) -> Result<(), color_eyre::Report>
         run_provision_container(
             &container_id,
             &profile_name,
+            engine_name,
             &active_model,
             ctx_window,
             Path::new("/workspace"),
@@ -720,11 +795,45 @@ async fn start_container(profile_name: String) -> Result<(), color_eyre::Report>
 async fn run_provision_container(
     container_id: &str,
     script_name: &str,
+    engine_runtime: &str,
     model_name: &str,
     ctx_window: u32,
     mount_point: &std::path::Path,
     port: u16,
 ) -> Result<(), color_eyre::Report> {
+    fn validate_script_name(script_name: &str) -> Result<(), color_eyre::Report> {
+        if script_name.is_empty() {
+            return Err(color_eyre::eyre::eyre!("invalid profile name: empty"));
+        }
+        if script_name
+            .chars()
+            .any(|c| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'))
+        {
+            return Err(color_eyre::eyre::eyre!(
+                "invalid profile name: unsupported characters"
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_engine_runtime(engine_runtime: &str) -> Result<(), color_eyre::Report> {
+        if engine_runtime.is_empty() {
+            return Err(color_eyre::eyre::eyre!("invalid runtime: empty"));
+        }
+        if engine_runtime
+            .chars()
+            .any(|c| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'))
+        {
+            return Err(color_eyre::eyre::eyre!(
+                "invalid runtime: unsupported characters"
+            ));
+        }
+        Ok(())
+    }
+
+    validate_script_name(script_name)?;
+    validate_engine_runtime(engine_runtime)?;
+
     let home = std::env::var("HOME")?;
     let host_script = PathBuf::from(&home).join(format!(
         ".config/muthr/sandbox.d/container/provision.d/{}.sh",
@@ -777,6 +886,7 @@ async fn run_provision_container(
     validate_env_value(model_name, "MUTHR_MODEL_NAME")?;
     validate_model_name(model_name)?;
     validate_env_value(mount_str, "MUTHR_WORKSPACE_MOUNT")?;
+    validate_env_value(engine_runtime, "MUTHR_ENGINE_RUNTIME")?;
 
     let host_lib_dir = host_script
         .parent()
@@ -794,13 +904,7 @@ async fn run_provision_container(
     let guest_script_path = format!("{}/{}.sh", guest_provision_dir, script_name);
 
     let mkdir_status = Command::new("container")
-        .args([
-            "exec",
-            container_id,
-            "sh",
-            "-lc",
-            &format!("mkdir -p '{}'", guest_provision_dir),
-        ])
+        .args(["exec", container_id, "mkdir", "-p", &guest_provision_dir])
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .status()
@@ -849,6 +953,8 @@ async fn run_provision_container(
 
     let mut child = Command::new("container")
         .args(["exec", "--workdir", "/tmp"])
+        .arg("--user")
+        .arg("muthr")
         .arg("--env")
         .arg(format!("MUTHR_OPENAI_URL={}", openai_url))
         .arg("--env")
@@ -863,6 +969,8 @@ async fn run_provision_container(
         .arg(format!("MUTHR_CONTAINER_HOST_GATEWAY={}", host_gateway))
         .arg("--env")
         .arg(format!("MUTHR_SEARXNG_URL={}", searxng_url))
+        .arg("--env")
+        .arg(format!("MUTHR_ENGINE_RUNTIME={}", engine_runtime))
         .arg(container_id)
         .arg("bash")
         .arg(&guest_script_path)
@@ -887,7 +995,7 @@ async fn run_provision_container(
 }
 
 async fn ensure_container_runtime_baseline(container_id: &str) -> Result<(), color_eyre::Report> {
-    let marker = "/var/lib/muthr/container-baseline-ready";
+    let marker = "/var/lib/muthr/container-baseline-v2";
     let has_marker = Command::new("container")
         .args([
             "exec",
@@ -908,7 +1016,7 @@ async fn ensure_container_runtime_baseline(container_id: &str) -> Result<(), col
             container_id,
             "sh",
             "-lc",
-            "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq bash curl ca-certificates sudo git",
+            "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq bash curl ca-certificates sudo git nodejs npm && if ! id -u muthr >/dev/null 2>&1; then useradd -m -s /bin/bash muthr; fi && usermod -aG sudo muthr && install -d -m 755 /etc/sudoers.d && printf 'muthr ALL=(ALL) NOPASSWD:ALL\\n' >/etc/sudoers.d/muthr && chmod 0440 /etc/sudoers.d/muthr && (chown -R muthr:muthr /workspace || true)",
         ])
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
@@ -926,7 +1034,7 @@ async fn ensure_container_runtime_baseline(container_id: &str) -> Result<(), col
             container_id,
             "sh",
             "-lc",
-            "mkdir -p /var/lib/muthr && touch /var/lib/muthr/container-baseline-ready",
+            "mkdir -p /var/lib/muthr && touch /var/lib/muthr/container-baseline-v2",
         ])
         .status()
         .await?;
@@ -938,6 +1046,9 @@ async fn ensure_container_runtime_baseline(container_id: &str) -> Result<(), col
 }
 
 async fn stop_container() -> Result<(), color_eyre::Report> {
+    let _lock =
+        crate::lifecycle::acquire("container-lifecycle", std::time::Duration::from_secs(20))
+            .await?;
     let (container_id, _, _) = resolve_workspace_context()?;
     if !container_exists(&container_id).await {
         return Ok(());
@@ -964,6 +1075,13 @@ async fn stop_container() -> Result<(), color_eyre::Report> {
 }
 
 async fn delete_container(container_id: &str, force: bool) -> Result<(), color_eyre::Report> {
+    let _lock =
+        crate::lifecycle::acquire("container-lifecycle", std::time::Duration::from_secs(20))
+            .await?;
+    delete_container_impl(container_id, force).await
+}
+
+async fn delete_container_impl(container_id: &str, force: bool) -> Result<(), color_eyre::Report> {
     if !force && !std::io::stdout().is_terminal() {
         eprintln!("error: terminal required for deletion, use --force to skip");
         std::process::exit(77);
