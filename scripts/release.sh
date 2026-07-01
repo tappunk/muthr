@@ -219,7 +219,7 @@ echo "[PROC] Propagating release configuration to Homebrew tap..."
 RAW_SHA=$(awk '{print $1}' "${CHECKSUM_NAME}")
 TAP_DIR="$(mktemp -d)"
 
-git clone --depth 1 "https://github.com/tappunk/homebrew-muthr.git" "$TAP_DIR"
+git clone --depth 1 "git@github.com:tappunk/homebrew-muthr.git" "$TAP_DIR"
 
 cat <<EOF >"${TAP_DIR}/Formula/muthr.rb"
 class Muthr < Formula
