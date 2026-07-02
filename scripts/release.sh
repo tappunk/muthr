@@ -260,6 +260,23 @@ EOF
   git commit -m "chore(formula): bump muthr to v${NEW_VERSION}"
   git push origin main
 )
+
+echo "[PROC] Validating Homebrew tap version and checksum..."
+TAP_FORMULA_RAW="$(gh api "repos/tappunk/homebrew-muthr/contents/Formula/muthr.rb" -H "Accept: application/vnd.github.raw")"
+TAP_VERSION="$(printf '%s\n' "$TAP_FORMULA_RAW" | awk -F'"' '/^  version "/ { print $2; exit }')"
+TAP_SHA="$(printf '%s\n' "$TAP_FORMULA_RAW" | awk -F'"' '/^  sha256 "/ { print $2; exit }')"
+
+if [[ "$TAP_VERSION" != "$NEW_VERSION" ]]; then
+  echo "[ERR] Homebrew tap formula version mismatch: expected ${NEW_VERSION}, found ${TAP_VERSION:-<empty>}"
+  exit 1
+fi
+
+if [[ "$TAP_SHA" != "$RAW_SHA" ]]; then
+  echo "[ERR] Homebrew tap formula checksum mismatch: expected ${RAW_SHA}, found ${TAP_SHA:-<empty>}"
+  exit 1
+fi
+
+echo "[PROC] Homebrew tap formula matches release v$NEW_VERSION"
 rm -rf "$TAP_DIR"
 
 echo "[PROC] Synchronizing local Homebrew tap mirror..."

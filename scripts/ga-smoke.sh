@@ -17,6 +17,7 @@ cargo test
 
 MOCK_WORKSPACE="$(mktemp -d "$HOME/.cache/muthr-smoke.XXXXXX")"
 MOCK_PROJECT="${MOCK_WORKSPACE}/smoke-project-alpha"
+MOCK_SANDBOX="muthr-smoke-project-alpha"
 mkdir -p "$MOCK_PROJECT"
 
 cleanup() {
@@ -25,7 +26,8 @@ cleanup() {
     if command -v container >/dev/null 2>&1 && command -v mlxcel-server >/dev/null 2>&1; then
         (
             cd "$MOCK_PROJECT" >/dev/null 2>&1 || true
-            cargo run --manifest-path "$REPO_ROOT/Cargo.toml" -- shutdown --yes --verbose >/dev/null 2>&1 || true
+            cargo run --manifest-path "$REPO_ROOT/Cargo.toml" -- services stop >/dev/null 2>&1 || true
+            cargo run --manifest-path "$REPO_ROOT/Cargo.toml" -- sandbox stop --name "$MOCK_SANDBOX" >/dev/null 2>&1 || true
         )
     fi
 
@@ -41,7 +43,8 @@ echo "[SMOKE] Project workspace context isolated at: ${MOCK_PROJECT}"
 
 echo "[SMOKE] Verifying CLI argument and state dispatch parsing layers..."
 cargo run -- sandbox delete --force --yes --dry-run
-cargo run -- shutdown --verbose --yes --dry-run
+cargo run -- services stop --dry-run
+cargo run -- sandbox stop --name "$MOCK_SANDBOX"
 
 echo "[SMOKE] Validating configuration translation behaviors..."
 if ! cargo run -- config show >/dev/null; then
@@ -78,7 +81,8 @@ echo "[SMOKE] 4. services status --output json"
 cargo run --manifest-path "$REPO_ROOT/Cargo.toml" -- services status --output json >/dev/null
 
 echo "[SMOKE] 5. shutdown"
-cargo run --manifest-path "$REPO_ROOT/Cargo.toml" -- shutdown --yes --verbose
+cargo run --manifest-path "$REPO_ROOT/Cargo.toml" -- services stop
+cargo run --manifest-path "$REPO_ROOT/Cargo.toml" -- sandbox stop --name "$MOCK_SANDBOX"
 
 popd >/dev/null
 
