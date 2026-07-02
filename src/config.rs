@@ -26,6 +26,7 @@ type ResolvedConfig = (
     Option<String>,
     Option<String>,
     Option<String>,
+    Option<String>,
 );
 
 #[derive(Subcommand)]
@@ -45,6 +46,7 @@ pub struct MuthrConfig {
     pub default_provision_profile: Option<String>,
     pub default_engine_runtime: Option<String>,
     pub default_engine_profile: Option<String>,
+    pub default_engine_bind_host: Option<String>,
     pub container_host_gateway: Option<String>,
 }
 
@@ -67,6 +69,7 @@ impl MuthrConfig {
             .unwrap_or_else(|| "opencode".to_string());
         let engine_runtime = self.default_engine_runtime.clone();
         let engine_profile = self.default_engine_profile.clone();
+        let engine_bind_host = self.default_engine_bind_host.clone();
         let container_host_gateway = self.container_host_gateway.clone();
         Ok((
             server_port,
@@ -75,6 +78,7 @@ impl MuthrConfig {
             provision_profile,
             engine_runtime,
             engine_profile,
+            engine_bind_host,
             container_host_gateway,
         ))
     }
@@ -87,6 +91,7 @@ impl MuthrConfig {
             provision_profile,
             engine_runtime,
             engine_profile,
+            engine_bind_host,
             container_host_gateway,
         ) = match self.clone().resolve() {
             Ok(v) => v,
@@ -108,6 +113,10 @@ impl MuthrConfig {
             engine_profile
                 .as_deref()
                 .unwrap_or("mlx-community/Qwen3.5-9B-MLX-4bit")
+        );
+        eprintln!(
+            "info: engine_bind_host  {}",
+            engine_bind_host.as_deref().unwrap_or("0.0.0.0")
         );
         eprintln!(
             "info: container_gateway {}",
@@ -145,6 +154,9 @@ pub fn load() -> Result<MuthrConfig, color_eyre::Report> {
     if let Ok(v) = std::env::var("MUTHR_ENGINE_PROFILE") {
         config.default_engine_profile = Some(v);
     }
+    if let Ok(v) = std::env::var("MUTHR_ENGINE_BIND_HOST") {
+        config.default_engine_bind_host = Some(v);
+    }
     if let Ok(v) = std::env::var("MUTHR_CONTAINER_HOST_GATEWAY") {
         config.container_host_gateway = Some(v);
     }
@@ -165,12 +177,34 @@ pub fn init_config(force: bool) -> Result<(), color_eyre::Report> {
     fs::set_permissions(&config_dir, fs::Permissions::from_mode(0o700))?;
 
     let template = r##"# muthr configuration
+
+# API port for local inference server
 server_port = 8080
+
+# Root used for project-to-sandbox mapping (must NOT be your home directory)
 workspace_root = "~/src"
+
+# Base directory for local model files
 model_dir = "~/opt/models"
+
+# Default sandbox profile
 default_provision_profile = "opencode"
+
+# Inference runtime: "mlxcel" or "llama"
 default_engine_runtime = "mlxcel"
+
+# Bind host for inference server (127.0.0.1 for host-only, 0.0.0.0 for sandbox access)
+default_engine_bind_host = "0.0.0.0"
+
+# Default model/profile passed to engine start when --profile is omitted.
+# MLX examples:
 default_engine_profile = "mlx-community/Qwen3.5-9B-MLX-4bit"
+# default_engine_profile = "/Users/user/opt/models/majentik/Qwen3.6-35B-A3B-RotorQuant-MLX-4bit"
+# llama example:
+# default_engine_profile = "/Users/user/opt/models/unsloth/Qwen3.6-35B-A3B-GGUF/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf"
+
+# Optional explicit container host gateway IP (auto-detected when unset)
+# container_host_gateway = "192.168.64.1"
 "##;
 
     fs::write(&config_path, template)?;

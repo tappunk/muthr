@@ -23,7 +23,7 @@ pub mod sandbox;
 pub mod services;
 pub mod shutdown;
 
-use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use clap::{ArgAction, CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{Shell, generate};
 use serde::Serialize;
 
@@ -79,7 +79,7 @@ enum Commands {
         verbose: bool,
         #[arg(long, help = "Model repo ID to use (defaults to config)")]
         profile: Option<String>,
-        #[arg(long, help = "Inference engine runtime (only mlxcel is supported)")]
+        #[arg(long, help = "Inference engine runtime (supported: mlxcel, llama)")]
         runtime: Option<String>,
         #[arg(short = 'n', long, help = "Preview actions without side effects")]
         dry_run: bool,
@@ -132,6 +132,21 @@ enum Commands {
 
     #[command(about = "Run diagnostics and health checks")]
     Doctor,
+
+    #[command(about = "Manage pre-baked sandbox golden images")]
+    Image {
+        #[command(subcommand)]
+        action: ImageCommands,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum ImageCommands {
+    #[command(about = "Build a golden image from a provision profile")]
+    Build {
+        #[arg(long, help = "Profile to pre-bake into a local image")]
+        profile: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -171,8 +186,15 @@ pub enum ServicesCommands {
 pub enum EngineCommands {
     #[command(about = "Start inference engine runtime")]
     Start {
+        #[arg(long, help = "Inference engine runtime (supported: mlxcel, llama)")]
+        runtime: Option<String>,
         #[arg(long, help = "Model repo ID to load")]
         profile: Option<String>,
+        #[arg(
+            long,
+            help = "Bind host for inference server (e.g. 127.0.0.1 or 0.0.0.0)"
+        )]
+        bind_host: Option<String>,
         #[arg(
             long,
             help = "Port to bind the inference engine server (default from muthr.toml or 8080)"
@@ -186,6 +208,8 @@ pub enum EngineCommands {
     },
     #[command(about = "Stop inference engine runtime")]
     Stop {
+        #[arg(long, help = "Inference engine runtime (supported: mlxcel, llama)")]
+        runtime: Option<String>,
         #[arg(long, help = "Stop all running engines")]
         all: bool,
     },
@@ -196,6 +220,8 @@ pub enum EngineCommands {
     },
     #[command(about = "List configured model profiles")]
     Presets {
+        #[arg(long, help = "Inference engine runtime (supported: mlxcel, llama)")]
+        runtime: Option<String>,
         #[arg(short, long, value_enum, default_value_t = OutputFormat::Text)]
         output: OutputFormat,
     },
@@ -210,9 +236,44 @@ pub enum SandboxCommands {
             help = "Profile to apply (run without --profile to list available profiles)!"
         )]
         profile: Option<String>,
+        #[arg(long, help = "Write session audit logs to this NDJSON file path")]
+        audit_log: Option<String>,
     },
-    #[command(about = "Stop active sandbox container")]
-    Stop,
+    #[command(
+        about = "Execute an interactive shell or a custom command inside the project sandbox"
+    )]
+    Shell {
+        #[arg(long, help = "Ensure this profile is applied before attaching")]
+        profile: Option<String>,
+        #[arg(
+            short,
+            long,
+            help = "Execute a non-interactive command instead of opening a login shell"
+        )]
+        command: Option<String>,
+        #[arg(long, help = "Bypass TTY requirements for non-interactive automation")]
+        no_tty: bool,
+        #[arg(
+            short,
+            long,
+            action = ArgAction::Append,
+            help = "Explicit environment additions in KEY=VALUE form"
+        )]
+        env: Vec<String>,
+        #[arg(long, help = "Write session audit logs to this NDJSON file path")]
+        audit_log: Option<String>,
+    },
+    #[command(about = "Stop active sandbox container, selected sandboxes, or all sandboxes")]
+    Stop {
+        #[arg(long, help = "Stop all managed project sandbox containers")]
+        all: bool,
+        #[arg(
+            long,
+            action = ArgAction::Append,
+            help = "Stop a specific sandbox container by name (repeatable)"
+        )]
+        name: Vec<String>,
+    },
     #[command(about = "Delete active sandbox container")]
     Delete {
         #[arg(long, help = "Skip confirmation prompt")]
@@ -243,21 +304,17 @@ async fn boot(
     sandbox::cleanup_untracked_vms(verbose).await?;
 
     let cfg = config::load()?;
-    let engine_name = runtime
-        .or_else(|| cfg.default_engine_runtime.clone())
-        .unwrap_or_else(|| "mlxcel".to_string());
-    if engine_name != "mlxcel" {
-        return Err(color_eyre::eyre::eyre!(
-            "unsupported engine runtime '{}' (only 'mlxcel' is supported)",
-            engine_name
-        ));
-    }
+    let engine_name = engine::resolve_runtime_for_profile(
+        runtime,
+        cfg.default_engine_runtime.clone(),
+        profile.as_deref(),
+    )?;
     let server_port = cfg.server_port.unwrap_or(8080);
 
     if engine::is_running().await {
         eprintln!("info: engine already running");
     } else {
-        engine::start(profile, server_port, false).await?;
+        engine::start(&engine_name, profile, server_port, None, false).await?;
     }
 
     if verbose {
@@ -268,93 +325,64 @@ async fn boot(
     Ok(())
 }
 
+fn resolve_runtime(
+    runtime_flag: Option<String>,
+    default_engine_runtime: Option<String>,
+    profile: Option<&str>,
+) -> Result<String, color_eyre::Report> {
+    engine::resolve_runtime_for_profile(runtime_flag, default_engine_runtime, profile)
+}
+
 async fn run() -> Result<(), color_eyre::Report> {
     let cli = Cli::parse();
 
     match cli.command {
         None => {
             let cfg = config::load()?;
-            let engine_name = cfg
-                .default_engine_runtime
-                .clone()
-                .unwrap_or_else(|| "mlxcel".to_string());
-            if engine_name != "mlxcel" {
-                return Err(color_eyre::eyre::eyre!(
-                    "unsupported engine runtime '{}' (only 'mlxcel' is supported)",
-                    engine_name
-                ));
-            }
+            let _ = resolve_runtime(None, cfg.default_engine_runtime.clone(), None)?;
             engine::status(OutputFormat::Text).await?
         }
         Some(Commands::Engine { action }) => match action {
             EngineCommands::Start {
+                runtime,
                 profile,
+                bind_host,
                 engine_server_port,
                 foreground,
             } => {
                 let cfg = config::load()?;
-                let engine_name = cfg
-                    .default_engine_runtime
-                    .clone()
-                    .unwrap_or_else(|| "mlxcel".to_string());
-                if engine_name != "mlxcel" {
-                    return Err(color_eyre::eyre::eyre!(
-                        "unsupported engine runtime '{}' (only 'mlxcel' is supported)",
-                        engine_name
-                    ));
-                }
+                let engine_name = resolve_runtime(
+                    runtime,
+                    cfg.default_engine_runtime.clone(),
+                    profile.as_deref(),
+                )?;
                 let server_port = engine_server_port.unwrap_or(cfg.server_port.unwrap_or(8080));
-                engine::start(profile, server_port, foreground).await?
+                engine::start(&engine_name, profile, server_port, bind_host, foreground).await?
             }
             EngineCommands::Status { output } => {
                 let cfg = config::load()?;
-                let engine_name = cfg
-                    .default_engine_runtime
-                    .clone()
-                    .unwrap_or_else(|| "mlxcel".to_string());
-                if engine_name != "mlxcel" {
-                    return Err(color_eyre::eyre::eyre!(
-                        "unsupported engine runtime '{}' (only 'mlxcel' is supported)",
-                        engine_name
-                    ));
-                }
+                let _ = resolve_runtime(None, cfg.default_engine_runtime.clone(), None)?;
                 engine::status(output).await?
             }
-            EngineCommands::Stop { all } => {
+            EngineCommands::Stop { runtime, all } => {
                 if all {
                     engine::stop_all().await?;
                 } else {
                     let cfg = config::load()?;
-                    let engine_name = cfg
-                        .default_engine_runtime
-                        .clone()
-                        .unwrap_or_else(|| "mlxcel".to_string());
-                    if engine_name != "mlxcel" {
-                        return Err(color_eyre::eyre::eyre!(
-                            "unsupported engine runtime '{}' (only 'mlxcel' is supported)",
-                            engine_name
-                        ));
-                    }
-                    engine::stop().await?;
+                    let engine_name =
+                        resolve_runtime(runtime, cfg.default_engine_runtime.clone(), None)?;
+                    engine::stop(&engine_name).await?;
                 }
             }
-            EngineCommands::Presets { output } => {
+            EngineCommands::Presets { runtime, output } => {
                 let cfg = config::load()?;
-                let engine_name = cfg
-                    .default_engine_runtime
-                    .clone()
-                    .unwrap_or_else(|| "mlxcel".to_string());
-                if engine_name != "mlxcel" {
-                    return Err(color_eyre::eyre::eyre!(
-                        "unsupported engine runtime '{}' (only 'mlxcel' is supported)",
-                        engine_name
-                    ));
-                }
-                engine::presets(output)?;
+                let engine_name =
+                    resolve_runtime(runtime, cfg.default_engine_runtime.clone(), None)?;
+                engine::presets_for_runtime(&engine_name, output)?;
             }
         },
         Some(Commands::Sandbox { action }) => match action {
-            SandboxCommands::Start { profile } => {
+            SandboxCommands::Start { profile, audit_log } => {
                 let home = std::env::var("HOME")?;
                 let config_dir = std::path::PathBuf::from(&home).join(".config/muthr");
                 let cfg = config::load()?;
@@ -413,9 +441,23 @@ async fn run() -> Result<(), color_eyre::Report> {
                     }
                 };
 
-                sandbox::start(profile_name).await?
+                sandbox::start(profile_name, audit_log).await?
             }
-            SandboxCommands::Stop => sandbox::stop().await?,
+            SandboxCommands::Shell {
+                profile,
+                command,
+                no_tty,
+                env,
+                audit_log,
+            } => sandbox::shell(profile, command, no_tty, env, audit_log).await?,
+            SandboxCommands::Stop { all, name } => {
+                if all && !name.is_empty() {
+                    return Err(color_eyre::eyre::eyre!(
+                        "--all cannot be combined with --name"
+                    ));
+                }
+                sandbox::stop(name, all).await?
+            }
             SandboxCommands::Delete {
                 force,
                 yes,
@@ -470,6 +512,9 @@ async fn run() -> Result<(), color_eyre::Report> {
         Some(Commands::Doctor) => {
             doctor::run().await?;
         }
+        Some(Commands::Image { action }) => match action {
+            ImageCommands::Build { profile } => sandbox::build_golden_image(profile).await?,
+        },
         Some(Commands::Completion { shell }) => {
             let mut cmd = Cli::command();
             generate(shell, &mut cmd, "muthr", &mut std::io::stdout());

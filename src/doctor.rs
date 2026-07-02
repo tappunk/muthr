@@ -97,6 +97,66 @@ fn check_mlxcel() -> Result<(), color_eyre::Report> {
     }
 }
 
+async fn check_native_arm64_buildkit() -> Result<(), color_eyre::Report> {
+    let probe_root =
+        std::env::temp_dir().join(format!("muthr-doctor-buildkit-{}", std::process::id()));
+    let containerfile_path = probe_root.join("Containerfile");
+    let probe_tag = "muthr-doctor-buildkit-probe:latest";
+
+    let _ = std::fs::remove_dir_all(&probe_root);
+    std::fs::create_dir_all(&probe_root)?;
+    std::fs::write(&containerfile_path, "FROM scratch\n")?;
+
+    let output = Command::new("container")
+        .args([
+            "build",
+            "-q",
+            "--platform",
+            "linux/arm64",
+            "--file",
+            containerfile_path.to_str().ok_or_else(|| {
+                color_eyre::eyre::eyre!("invalid doctor probe containerfile path")
+            })?,
+            "--tag",
+            probe_tag,
+            probe_root
+                .to_str()
+                .ok_or_else(|| color_eyre::eyre::eyre!("invalid doctor probe build path"))?,
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await?;
+
+    let _ = Command::new("container")
+        .args(["image", "rm", probe_tag])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await;
+    let _ = std::fs::remove_dir_all(&probe_root);
+
+    if output.status.success() {
+        eprintln!("ok: container buildkit supports native linux/arm64 builds");
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr).to_ascii_lowercase();
+    let stdout = String::from_utf8_lossy(&output.stdout).to_ascii_lowercase();
+    if stderr.contains("rosetta") || stdout.contains("rosetta") {
+        eprintln!("warning: container buildkit reports Rosetta dependency for linux/arm64 builds");
+        eprintln!(
+            "hint: this is a backend limitation; image build may fail until backend buildkit is configured for pure arm64"
+        );
+        return Ok(());
+    }
+
+    eprintln!(
+        "warning: container buildkit linux/arm64 probe failed; golden image builds may be unavailable"
+    );
+    Ok(())
+}
+
 fn check_config() -> Result<(), color_eyre::Report> {
     let cfg = crate::config::load()?;
     cfg.print_resolved();
@@ -173,6 +233,7 @@ pub async fn run() -> Result<(), color_eyre::Report> {
     eprintln!("muthr doctor");
 
     check_container_cli()?;
+    check_native_arm64_buildkit().await?;
     check_mlxcel()?;
     check_config()?;
     check_engine().await?;

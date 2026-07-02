@@ -26,11 +26,19 @@ fn has_label(item: &serde_json::Value, key: &str, expected: &str) -> bool {
 }
 
 fn container_matches_id(item: &serde_json::Value, container_id: &str) -> bool {
-    item.get("id").and_then(|v| v.as_str()).or_else(|| {
-        item.get("configuration")
-            .and_then(|v| v.get("id"))
-            .and_then(|v| v.as_str())
-    }) == Some(container_id)
+    item.get("id")
+        .or_else(|| item.get("ID"))
+        .or_else(|| item.get("Id"))
+        .and_then(|v| v.as_str())
+        .or_else(|| {
+            item.get("configuration")
+                .or_else(|| item.get("Configuration"))
+                .or_else(|| item.get("config"))
+                .or_else(|| item.get("Config"))
+                .and_then(|v| v.get("id").or_else(|| v.get("ID")).or_else(|| v.get("Id")))
+                .and_then(|v| v.as_str())
+        })
+        == Some(container_id)
 }
 
 const SEARXNG_CONFIG_REV: &str = "v3";
@@ -484,9 +492,19 @@ fn is_container_running(container_id: &str) -> bool {
                         let id_matches = container_matches_id(item, container_id);
                         let state = item
                             .get("status")
+                            .or_else(|| item.get("Status"))
                             .and_then(|v| v.get("state"))
+                            .or_else(|| {
+                                item.get("status")
+                                    .or_else(|| item.get("Status"))
+                                    .and_then(|v| v.get("State"))
+                            })
                             .and_then(|v| v.as_str())
-                            .or_else(|| item.get("state").and_then(|v| v.as_str()));
+                            .or_else(|| {
+                                item.get("state")
+                                    .or_else(|| item.get("State"))
+                                    .and_then(|v| v.as_str())
+                            });
                         id_matches && state == Some("running")
                     })
                 })
@@ -602,6 +620,7 @@ pub async fn delete(force: bool, dry_run: bool) -> Result<(), color_eyre::Report
     }
     let container_id = "muthr-services";
     let searxng_container_id = "muthr-searxng";
+    let home = std::env::var("HOME")?;
 
     if !is_container_exists(container_id) && !is_container_exists(searxng_container_id) {
         return Ok(());
@@ -639,6 +658,12 @@ pub async fn delete(force: bool, dry_run: bool) -> Result<(), color_eyre::Report
             ));
         }
         eprintln!("info: deleted {}", searxng_container_id);
+    }
+
+    let searxng_cache_dir = PathBuf::from(home).join(".cache/muthr/searxng");
+    if searxng_cache_dir.exists() {
+        std::fs::remove_dir_all(&searxng_cache_dir)?;
+        eprintln!("info: removed {}", searxng_cache_dir.display());
     }
 
     Ok(())

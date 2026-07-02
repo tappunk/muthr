@@ -29,12 +29,27 @@ async fn discover_sandbox_containers() -> Vec<String> {
                 items
                     .iter()
                     .filter_map(|item| {
-                        let id = item.get("id").and_then(|v| v.as_str()).or_else(|| {
-                            item.get("configuration")
-                                .and_then(|v| v.get("id"))
-                                .and_then(|v| v.as_str())
-                        })?;
-                        let labels = item.get("configuration").and_then(|v| v.get("labels"));
+                        let id = item
+                            .get("id")
+                            .or_else(|| item.get("ID"))
+                            .or_else(|| item.get("Id"))
+                            .and_then(|v| v.as_str())
+                            .or_else(|| {
+                                item.get("configuration")
+                                    .or_else(|| item.get("Configuration"))
+                                    .or_else(|| item.get("config"))
+                                    .or_else(|| item.get("Config"))
+                                    .and_then(|v| {
+                                        v.get("id").or_else(|| v.get("ID")).or_else(|| v.get("Id"))
+                                    })
+                                    .and_then(|v| v.as_str())
+                            })?;
+                        let labels = item
+                            .get("configuration")
+                            .or_else(|| item.get("Configuration"))
+                            .or_else(|| item.get("config"))
+                            .or_else(|| item.get("Config"))
+                            .and_then(|v| v.get("labels").or_else(|| v.get("Labels")));
                         let managed = labels
                             .and_then(|v| v.get("muthr.managed"))
                             .and_then(|v| v.as_str())
@@ -79,10 +94,14 @@ async fn stop_container(name: String, timeout_secs: u64, verbose: bool) {
 
 async fn stop_engine(verbose: bool) {
     let mut had_any = false;
+    let default_runtime = crate::config::load()
+        .ok()
+        .and_then(|cfg| cfg.default_engine_runtime)
+        .unwrap_or_else(|| "mlxcel".to_string());
 
     if crate::engine::is_running().await {
         had_any = true;
-        if let Err(err) = crate::engine::stop().await {
+        if let Err(err) = crate::engine::stop_all().await {
             eprintln!("warning: failed to stop inference engine: {}", err);
         }
     }
@@ -91,7 +110,7 @@ async fn stop_engine(verbose: bool) {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         if crate::engine::is_running().await {
             eprintln!("warning: inference engine still running after stop request; retrying");
-            if let Err(err) = crate::engine::stop().await {
+            if let Err(err) = crate::engine::stop(&default_runtime).await {
                 eprintln!("warning: second stop attempt failed: {}", err);
             }
         }
