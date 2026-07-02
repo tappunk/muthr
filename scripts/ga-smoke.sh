@@ -27,7 +27,7 @@ cleanup() {
         (
             cd "$MOCK_PROJECT" >/dev/null 2>&1 || true
             cargo run --manifest-path "$REPO_ROOT/Cargo.toml" -- services stop >/dev/null 2>&1 || true
-            cargo run --manifest-path "$REPO_ROOT/Cargo.toml" -- sandbox stop --name "$MOCK_SANDBOX" >/dev/null 2>&1 || true
+            cargo run --manifest-path "$REPO_ROOT/Cargo.toml" -- sandbox delete --force --yes >/dev/null 2>&1 || true
         )
     fi
 
@@ -68,6 +68,9 @@ echo "[SMOKE] Running full lifecycle integration test (run -> sandbox -> shutdow
 
 pushd "$MOCK_PROJECT" >/dev/null
 
+echo "[SMOKE] 0. sandbox delete --force --yes (reset stale state)"
+cargo run --manifest-path "$REPO_ROOT/Cargo.toml" -- sandbox delete --force --yes || true
+
 echo "[SMOKE] 1. muthr run"
 cargo run --manifest-path "$REPO_ROOT/Cargo.toml" -- run --verbose
 
@@ -82,7 +85,7 @@ cargo run --manifest-path "$REPO_ROOT/Cargo.toml" -- services status --output js
 
 echo "[SMOKE] 5. shutdown"
 cargo run --manifest-path "$REPO_ROOT/Cargo.toml" -- services stop
-cargo run --manifest-path "$REPO_ROOT/Cargo.toml" -- sandbox stop --name "$MOCK_SANDBOX"
+cargo run --manifest-path "$REPO_ROOT/Cargo.toml" -- sandbox delete --force --yes
 
 popd >/dev/null
 
